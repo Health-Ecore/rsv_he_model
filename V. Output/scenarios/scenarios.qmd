@@ -1,0 +1,1320 @@
+---
+title: "Scenarios"
+format: 
+  html:
+    code-fold: true
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    smooth-scroll: true
+editor: source
+project:
+  execute-dir: project
+---
+```{r}
+## Load packages -----------------------------------------------------------
+box::use(dplyr[...])
+box::use(purrr[...])
+box::use(gt[...])
+box::use(stringr[...])
+box::use(ggplot2[...])
+
+## Load custom modules -----------------------------------------------------
+options(box.path = getwd())
+box::purge_cache()
+box::use(IV.Functions/currency_cbs)
+box::use(IV.Functions/demographics)
+box::use(IV.Functions/reference_prices)
+box::use(IV.Functions/discounting)
+box::use(IV.Functions/vaccine)
+box::use(IV.Functions/rsv_dectree)
+
+
+## Core settings -----------------------------------------------------------
+probabilistic <- TRUE
+iter <- 1000
+n_cores <- 24
+
+box::use(future[...])
+plan(multisession, workers = n_cores)
+n_cores <- 1
+
+```
+
+
+# Base case
+Base case in this document is vaccinating the population aged 75 - 89, and risk groups from the age of 60.
+```{r}
+settings_basecase <- rsv_dectree$create_settings()
+
+rsv_res <- rsv_dectree$run(
+  settings = settings_basecase,
+  probabilistic = probabilistic, 
+  iter = iter,
+  n_cores = n_cores,
+  ret = "incremental"
+)
+
+rsv_ceprice <-  rsv_dectree$calc_price(rsv_res, settings = settings_basecase)
+
+res_basecase <- rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings = settings_basecase, nice_table = F) |> 
+  mutate(scenario_number = "0",
+         scenario_name = "Base case")
+
+ceprice_basecase <- rsv_ceprice$price
+
+
+ceac_basecase_originalprice <- rsv_dectree$create_ceac(
+  incremental_results = rsv_res,
+  settings = settings_basecase
+)
+
+
+ceac_basecase <- rsv_dectree$create_ceac(
+  incremental_results = rsv_ceprice$new_incremental,
+  settings = settings_basecase
+)
+
+rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings_basecase, nice_table = T)
+
+
+
+```
+
+
+# Scenario 1
+## Description of scenario
+Hospitalisatie incidentie in de groep 60-64 gelijktrekken met de 65-69, rationale: nu een schatting in 18-64 categorie, dit geeft allicht een onderschatting van de incidentie in de groep 60-64.
+
+
+```{r}
+settings_scenario1 <- rsv_dectree$create_settings(
+  probabilities = "scenario1"
+)
+
+rsv_res <- rsv_dectree$run(
+  settings = settings_scenario1,
+  probabilistic = probabilistic, 
+  iter = iter,
+  n_cores = n_cores,
+  ret = "incremental"
+)
+
+rsv_ceprice <-  rsv_dectree$calc_price(rsv_res, settings = settings_scenario1)
+
+res_scenario1 <- rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings_scenario1, nice_table = F) |> 
+  mutate(scenario_number = "1",
+         scenario_name = "Alternative hospitalization rates ages 60 - 64")
+
+ceprice_scenario1 <- rsv_ceprice$price
+
+ceac_scenario1_originalprice <- rsv_dectree$create_ceac(
+  incremental_results = rsv_res,
+  settings = settings_scenario1
+)
+
+ceac_scenario1 <- rsv_dectree$create_ceac(
+  incremental_results = rsv_ceprice$new_incremental,
+  settings = settings_scenario1
+)
+
+```
+
+## Changed methods
+### Probabilities
+
+```{r}
+## Load data ---------------------------------------------------------------
+rsv_dat <- rsv_dectree$load_data(settings_scenario1, probabilistic, iter)
+
+## Prep data ---------------------------------------------------------------
+rsv_prep <- rsv_dectree$prep_data(rsv_dat, settings_scenario1, probabilistic, iter)
+
+
+prob_probabilistic <- rsv_prep |> 
+  select(age, probs) |> 
+  tidyr::unnest(probs) |> 
+  rename(prob_distr = prob)
+
+prob_source <- rsv_dat$probs |> 
+  mutate(age = purrr::map2(age_start, age_end, ~.x:.y)) |> 
+  tidyr::unnest(age) |> 
+  filter(age >= settings_scenario1$min_age,
+         age <= settings_scenario1$max_age) |> 
+  left_join(prob_probabilistic, by = c("param", "age")) |> 
+  mutate(prob_distr = case_when(
+    distribution == "none" ~ NA,
+    distribution != "none" ~ prob_distr
+  )) |> 
+  select(-age) |> 
+  distinct()
+
+prob_source |> 
+  mutate(distr = case_when(
+    distribution == "truncnorm" ~ stringr::str_c("Truncated normal, se: ", se),
+    distribution == "beta" ~ stringr::str_c("Beta, shape1: ", nom, "; shape2: ", denom - nom),
+    distribution == "none" ~ "None"
+  )) |> 
+  select(explanation, `Age group` = agegroup,  Probability = prob, Distribution = distr, Density = prob_distr, Reference = reference) |> 
+  filter(explanation == "Hospital incidence") |> 
+  group_by(explanation) |>
+  gt() |> 
+  tab_header("Probabilities") |> 
+  fmt_number(columns = "Probability", decimals = 4) |> 
+  gtExtras::gt_plt_dist(Density, type = "density", same_limit = FALSE)
+  
+```
+
+## Results
+```{r}
+rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings_scenario1, nice_table = T)
+```
+
+# Scenario 2
+## Description of scenario
+
+In this scenario, mortality in nursing homes is turned off.
+
+```{r}
+settings_scenario2 <- rsv_dectree$create_settings(
+  include_mortality_nursing = FALSE
+)
+
+rsv_res <- rsv_dectree$run(
+  settings = settings_scenario2,
+  probabilistic = probabilistic, 
+  iter = iter,
+  n_cores = n_cores,
+  ret = "incremental"
+)
+
+rsv_ceprice <-  rsv_dectree$calc_price(rsv_res, settings = settings_scenario2)
+
+res_scenario2 <- rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings_scenario2, nice_table = F) |> 
+  mutate(scenario_number = "2",
+         scenario_name = "Exclusion of nursing home mortality")
+
+ceprice_scenario2 <- rsv_ceprice$price
+
+ceac_scenario2_originalprice <- rsv_dectree$create_ceac(
+  incremental_results = rsv_res,
+  settings = settings_scenario2
+)
+
+ceac_scenario2 <- rsv_dectree$create_ceac(
+  incremental_results = rsv_ceprice$new_incremental,
+  settings = settings_scenario2
+)
+
+```
+
+
+## Changed methods
+
+### Probabilities
+```{r}
+## Load data ---------------------------------------------------------------
+rsv_dat <- rsv_dectree$load_data(settings_scenario2, probabilistic, iter)
+
+## Prep data ---------------------------------------------------------------
+rsv_prep <- rsv_dectree$prep_data(rsv_dat, settings_scenario1, probabilistic, iter)
+
+
+prob_probabilistic <- rsv_prep |> 
+  select(age, probs) |> 
+  tidyr::unnest(probs) |> 
+  rename(prob_distr = prob)
+
+prob_source <- rsv_dat$probs |> 
+  mutate(age = purrr::map2(age_start, age_end, ~.x:.y)) |> 
+  tidyr::unnest(age) |> 
+  filter(age >= settings_scenario2$min_age,
+         age <= settings_scenario2$max_age) |> 
+  left_join(prob_probabilistic, by = c("param", "age")) |> 
+  mutate(prob_distr = case_when(
+    distribution == "none" ~ NA,
+    distribution != "none" ~ prob_distr
+  )) |> 
+  select(-age) |> 
+  distinct()
+
+prob_source |> 
+  mutate(distr = case_when(
+    distribution == "truncnorm" ~ stringr::str_c("Truncated normal, se: ", se),
+    distribution == "beta" ~ stringr::str_c("Beta, shape1: ", nom, "; shape2: ", denom - nom),
+    distribution == "none" ~ "None"
+  )) |> 
+  select(explanation, `Age group` = agegroup,  Probability = prob, Distribution = distr, Density = prob_distr, Reference = reference) |> 
+  filter(stringr::str_detect(explanation, "nursing")) |> 
+  group_by(explanation) |>
+  gt() |> 
+  tab_header("Probabilities") |> 
+  fmt_number(columns = "Probability", decimals = 4) |> 
+  gtExtras::gt_plt_dist(Density, type = "density", same_limit = FALSE)
+
+  
+```
+
+### Demographic data
+```{r}
+pop_start <- demographics$create(settings_scenario2) |> 
+  demographics$add_nursinghomes()
+
+population_annual <- pop_start |> 
+  filter(month == settings_scenario2$start_month) |>
+  group_by(year) |> 
+  mutate(Reference = "Statistics Netherlands (CBS)",
+         year = year + 1) |> 
+  select(age, prop_nursing) 
+
+population_annual |> 
+  ungroup() |> 
+  filter(year == min(year)) |>
+  select(-year) |> 
+  gt() |> 
+  cols_label(
+        age = "Age",
+        prop_nursing = "Percentage in nursing home"
+      ) |> 
+  fmt_percent(columns = 2) |> 
+  tab_header("Demographic data")
+```
+
+### Life expectancy
+Om de gewonnen QALYs en kosten van een voorkomen RSV case in een verpleeghuis te bepalen, moeten een aantal aannames gedaan worden, aangezien deze data niet beschikbaar is. De grote vraag is hoeveel levensjaren je kunt winnen wanneer iemand in een verpleeghuis niet overlijdt aan RSV. Uit een Nederlandse studie naar de oversterfte van COVID-19 in Nederlandse verpleeghuizen blijkt dat voor de COVID-crisis de sterftekans rond de 0.290 per jaar lag, dit vertaald in een resterende levensverwachting van 1/0.293=3,4 jaar. De gemiddelde leeftijd in een verpleeghuis blijkt uit de studie is 85 jaar. In de algemene is de levensverwachting van iemand van 85 6,36 jaar, dus de studie laat zien dat de morbiditeit van mensen in een verpleeghuis de levensverwachting substantieel verlaagd wat je ook verwacht. 
+Er is ook weinig bekend over de kwaliteit van leven in een verpleeghuis. In ieder geval zijn er weinig studies die de utility per leeftijd geeft. In een Poolse studie werd gevonden dat de mensen in een nursing home en community dwelling ouderen geen significant verschil vertoonden in de kwaliteit van leven gemeten met de EQ-5D. Om de gewonnen QALYs te kunnen berekenen kunnen we de 3,4 gewonnen levensjaren  vermenigvuldigen met de background utility van 85,86,87 en 88 jaar (x0,4 om te corrigeren voor de 0,4 jaar). En deze disconteren.
+
+```{r}
+rsv_dat$outcomes |> 
+  filter(item == "life expectancy nursing homes (years)") |> 
+  select(item, mean, sd, distribution) |> 
+  gt() |> 
+  tab_header("Life expectancy")
+
+  
+```
+
+## Results
+```{r}
+rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings_scenario2, nice_table = T)
+```
+# Scenario 3
+## Description of scenario
+Initiële resultaten laten een langdurige bescherming zien tegen RSV infecties en geassocieerde uitkomsten. In de base case gebruiken we daarom een driejaarlijks interval. In dit scenario  wordt jaarlijks en tweejaarlijks vaccineren verkend.
+
+```{r}
+settings_scenario3a <- rsv_dectree$create_settings(
+  included_strategies = list(
+    no_vaccine = list(
+      name = "no_vaccine",
+      nice_name = "No vaccine",
+      settings_file = "no_vaccine",
+      administration = 1,
+      waning = "none",
+      price = 0
+    ),
+    rsv_generic_vaccine = list(
+      name = "rsv_generic_vaccine",
+      nice_name = "RSV generic vaccine",
+      settings_file = "rsv_generic_vaccine",
+      administration = 1,
+      waning = "sigmoid",
+      price = 150
+    )
+)
+)
+
+
+
+
+settings_scenario3b <- rsv_dectree$create_settings(
+  included_strategies = list(
+    no_vaccine = list(
+      name = "no_vaccine",
+      nice_name = "No vaccine",
+      settings_file = "no_vaccine",
+      administration = 2,
+      waning = "none",
+      price = 0
+    ),
+    rsv_generic_vaccine = list(
+      name = "rsv_generic_vaccine",
+      nice_name = "RSV generic vaccine",
+      settings_file = "rsv_generic_vaccine",
+      administration = 2,
+      waning = "sigmoid",
+      price = 150
+    )
+)
+)
+
+```
+
+
+## Annual vaccination
+### Changed methods
+#### Vaccine effectiveness
+```{r}
+
+## Load data ---------------------------------------------------------------
+rsv_dat <- rsv_dectree$load_data(settings_scenario3a, probabilistic, iter)
+
+## Prep data ---------------------------------------------------------------
+rsv_prep <- rsv_dectree$prep_data(rsv_dat, settings_scenario3a, probabilistic, iter)
+
+
+rsv_dat$vaccines$rsv_generic_vaccine$effectiveness |> 
+  mutate(effectiveness = map(effectiveness, ~tibble(iter = 1:iter, effectiveness = .x), iter),
+         date = lubridate::as_date(stringr::str_c(year, "-", month,"-1"))) |> 
+  tidyr::unnest(effectiveness) |> 
+  group_by(outcome, date) |> 
+  summarise(effect = mean(effectiveness),
+            low = quantile(effectiveness, .025),
+            high = quantile(effectiveness, .975),
+            .groups = "drop") |> 
+  ungroup() |> 
+  ggplot() +
+  geom_line(aes(x = date, y = effect)) +
+  geom_ribbon(aes(x = date, ymin = low, ymax = high), alpha = .2) +
+  facet_wrap(~outcome)
+
+```
+
+### Results
+```{r}
+rsv_res <- rsv_dectree$run(
+  settings = settings_scenario3a,
+  probabilistic = probabilistic, 
+  iter = iter,
+  n_cores = n_cores,
+  ret = "incremental"
+)
+
+rsv_ceprice <-  rsv_dectree$calc_price(rsv_res, settings = settings_scenario3a)
+
+res_scenario3a <- rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings_scenario3a, nice_table = F) |> 
+  mutate(scenario_number = "3a",
+         scenario_name = "Vaccination every year")
+
+ceprice_scenario3a <- rsv_ceprice$price
+
+ceac_scenario3a <- rsv_dectree$create_ceac(
+  incremental_results = rsv_ceprice$new_incremental,
+  settings = settings_scenario3a
+)
+
+ceac_scenario3a_originalprice <- rsv_dectree$create_ceac(
+  incremental_results = rsv_res,
+  settings = settings_scenario3a
+)
+
+rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings_scenario3a, nice_table = T)
+
+
+```
+
+## Vaccination every other year
+### Changed methods
+#### Vaccine effectiveness
+```{r}
+
+## Load data ---------------------------------------------------------------
+rsv_dat <- rsv_dectree$load_data(settings_scenario3b, probabilistic, iter)
+
+## Prep data ---------------------------------------------------------------
+rsv_prep <- rsv_dectree$prep_data(rsv_dat, settings_scenario3b, probabilistic, iter)
+
+
+rsv_dat$vaccines$rsv_generic_vaccine$effectiveness |> 
+  mutate(effectiveness = map(effectiveness, ~tibble(iter = 1:iter, effectiveness = .x), iter),
+         date = lubridate::as_date(stringr::str_c(year, "-", month,"-1"))) |> 
+  tidyr::unnest(effectiveness) |> 
+  group_by(outcome, date) |> 
+  summarise(effect = mean(effectiveness),
+            low = quantile(effectiveness, .025),
+            high = quantile(effectiveness, .975),
+            .groups = "drop") |> 
+  ungroup() |> 
+  ggplot() +
+  geom_line(aes(x = date, y = effect)) +
+  geom_ribbon(aes(x = date, ymin = low, ymax = high), alpha = .2) +
+  facet_wrap(~outcome)
+
+```
+### Results
+```{r}
+rsv_res <- rsv_dectree$run(
+  settings = settings_scenario3b,
+  probabilistic = probabilistic, 
+  iter = iter,
+  n_cores = n_cores,
+  ret = "incremental"
+)
+
+rsv_ceprice <-  rsv_dectree$calc_price(rsv_res, settings = settings_scenario3b)
+
+res_scenario3b <- rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings_scenario3b, nice_table = F) |> 
+  mutate(scenario_number = "3b",
+         scenario_name = "Vaccination every other year")
+
+ceprice_scenario3b <- rsv_ceprice$price
+
+ceac_scenario3b_originalprice <- rsv_dectree$create_ceac(
+  incremental_results = rsv_res,
+  settings = settings_scenario3b
+)
+
+ceac_scenario3b <- rsv_dectree$create_ceac(
+  incremental_results = rsv_ceprice$new_incremental,
+  settings = settings_scenario3b
+)
+
+rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings_scenario3b, nice_table = T)
+
+
+```
+
+# Scenario 4
+## Description of scenario
+Oude data Johannessen
+
+
+```{r}
+settings_scenario4 <- rsv_dectree$create_settings(
+  probabilities = "scenario4"
+)
+
+rsv_res <- rsv_dectree$run(
+  settings = settings_scenario4,
+  probabilistic = probabilistic, 
+  iter = iter,
+  n_cores = n_cores,
+  ret = "incremental"
+)
+
+rsv_ceprice <-  rsv_dectree$calc_price(rsv_res, settings = settings_scenario4)
+
+res_scenario4 <- rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings_scenario4, nice_table = F) |> 
+  mutate(scenario_number = "4",
+         scenario_name = "Updated RESCUE hospital incidence estimates")
+
+ceprice_scenario4 <- rsv_ceprice$price
+
+ceac_scenario4_originalprice <- rsv_dectree$create_ceac(
+  incremental_results = rsv_res,
+  settings = settings_scenario4
+)
+
+ceac_scenario4 <- rsv_dectree$create_ceac(
+  incremental_results = rsv_ceprice$new_incremental,
+  settings = settings_scenario4
+)
+
+```
+
+## Changed methods
+### Probabilities
+
+```{r}
+## Load data ---------------------------------------------------------------
+rsv_dat <- rsv_dectree$load_data(settings_scenario4, probabilistic, iter)
+
+## Prep data ---------------------------------------------------------------
+rsv_prep <- rsv_dectree$prep_data(rsv_dat, settings_scenario4, probabilistic, iter)
+
+
+prob_probabilistic <- rsv_prep |> 
+  select(age, probs) |> 
+  tidyr::unnest(probs) |> 
+  rename(prob_distr = prob)
+
+prob_source <- rsv_dat$probs |> 
+  mutate(age = purrr::map2(age_start, age_end, ~.x:.y)) |> 
+  tidyr::unnest(age) |> 
+  filter(age >= settings_scenario4$min_age,
+         age <= settings_scenario4$max_age) |> 
+  left_join(prob_probabilistic, by = c("param", "age")) |> 
+  mutate(prob_distr = case_when(
+    distribution == "none" ~ NA,
+    distribution != "none" ~ prob_distr
+  )) |> 
+  select(-age) |> 
+  distinct()
+
+prob_source |> 
+  mutate(distr = case_when(
+    distribution == "truncnorm" ~ stringr::str_c("Truncated normal, se: ", se),
+    distribution == "beta" ~ stringr::str_c("Beta, shape1: ", nom, "; shape2: ", denom - nom),
+    distribution == "none" ~ "None"
+  )) |> 
+  select(explanation, `Age group` = agegroup,  Probability = prob, Distribution = distr, Density = prob_distr, Reference = reference) |> 
+  filter(explanation == "Hospital incidence") |> 
+  group_by(explanation) |>
+  gt() |> 
+  tab_header("Probabilities") |> 
+  fmt_number(columns = "Probability", decimals = 4) |> 
+  gtExtras::gt_plt_dist(Density, type = "density", same_limit = FALSE)
+  
+```
+
+## Results
+```{r}
+rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings_scenario4, nice_table = T)
+```
+
+
+# Scenario 4b
+## Description of scenario
+Using RIVM data.
+
+
+```{r}
+settings_scenario4b <- rsv_dectree$create_settings(
+  probabilities = "scenario1_1"
+)
+
+rsv_res <- rsv_dectree$run(
+  settings = settings_scenario4b,
+  probabilistic = probabilistic, 
+  iter = iter,
+  n_cores = n_cores,
+  ret = "incremental"
+)
+
+rsv_ceprice <-  rsv_dectree$calc_price(rsv_res, settings = settings_scenario4b)
+
+res_scenario4b <- rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings_scenario4b, nice_table = F) |> 
+  mutate(scenario_number = "4b",
+         scenario_name = "RIVM hospital incidence estimates")
+
+ceprice_scenario4b <- rsv_ceprice$price
+
+ceac_scenario4b_originalprice <- rsv_dectree$create_ceac(
+  incremental_results = rsv_res,
+  settings = settings_scenario4b
+)
+
+ceac_scenario4b <- rsv_dectree$create_ceac(
+  incremental_results = rsv_ceprice$new_incremental,
+  settings = settings_scenario4b
+)
+
+```
+
+## Changed methods
+### Probabilities
+
+```{r}
+## Load data ---------------------------------------------------------------
+rsv_dat <- rsv_dectree$load_data(settings_scenario4b, probabilistic, iter)
+
+## Prep data ---------------------------------------------------------------
+rsv_prep <- rsv_dectree$prep_data(rsv_dat, settings_scenario4b, probabilistic, iter)
+
+
+prob_probabilistic <- rsv_prep |> 
+  select(age, probs) |> 
+  tidyr::unnest(probs) |> 
+  rename(prob_distr = prob)
+
+prob_source <- rsv_dat$probs |> 
+  mutate(age = purrr::map2(age_start, age_end, ~.x:.y)) |> 
+  tidyr::unnest(age) |> 
+  filter(age >= settings_scenario4b$min_age,
+         age <= settings_scenario4b$max_age) |> 
+  left_join(prob_probabilistic, by = c("param", "age")) |> 
+  mutate(prob_distr = case_when(
+    distribution == "none" ~ NA,
+    distribution != "none" ~ prob_distr
+  )) |> 
+  select(-age) |> 
+  distinct()
+
+prob_source |> 
+  mutate(distr = case_when(
+    distribution == "truncnorm" ~ stringr::str_c("Truncated normal, se: ", se),
+    distribution == "beta" ~ stringr::str_c("Beta, shape1: ", nom, "; shape2: ", denom - nom),
+    distribution == "none" ~ "None"
+  )) |> 
+  select(explanation, `Age group` = agegroup,  Probability = prob, Distribution = distr, Density = prob_distr, Reference = reference) |> 
+  filter(explanation == "Hospital incidence") |> 
+  group_by(explanation) |>
+  gt() |> 
+  tab_header("Probabilities") |> 
+  fmt_number(columns = "Probability", decimals = 4) #|> 
+  #gtExtras::gt_plt_dist(Density, type = "density", same_limit = FALSE)
+  
+```
+
+## Results
+```{r}
+rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings_scenario4b, nice_table = T)
+```
+
+# Scenario 4c
+## Description of scenario
+Combined data from Johanessen 2025 and Korsten preprint.
+
+
+```{r}
+settings_scenario4c <- rsv_dectree$create_settings(
+  probabilities = "scenario1_2"
+)
+
+rsv_res <- rsv_dectree$run(
+  settings = settings_scenario4c,
+  probabilistic = probabilistic, 
+  iter = iter,
+  n_cores = n_cores,
+  ret = "incremental"
+)
+
+rsv_ceprice <-  rsv_dectree$calc_price(rsv_res, settings = settings_scenario4c)
+
+res_scenario4c <- rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings_scenario4c, nice_table = F) |> 
+  mutate(scenario_number = "4c",
+         scenario_name = "Combined hospital incidence Johanessen and Korsten")
+
+ceprice_scenario4c <- rsv_ceprice$price
+
+ceac_scenario4c_originalprice <- rsv_dectree$create_ceac(
+  incremental_results = rsv_res,
+  settings = settings_scenario4c
+)
+
+ceac_scenario4c <- rsv_dectree$create_ceac(
+  incremental_results = rsv_ceprice$new_incremental,
+  settings = settings_scenario4c
+)
+
+```
+
+## Changed methods
+### Probabilities
+
+```{r}
+## Load data ---------------------------------------------------------------
+rsv_dat <- rsv_dectree$load_data(settings_scenario4c, probabilistic, iter)
+
+## Prep data ---------------------------------------------------------------
+rsv_prep <- rsv_dectree$prep_data(rsv_dat, settings_scenario4c, probabilistic, iter)
+
+
+prob_probabilistic <- rsv_prep |> 
+  select(age, probs) |> 
+  tidyr::unnest(probs) |> 
+  rename(prob_distr = prob)
+
+prob_source <- rsv_dat$probs |> 
+  mutate(age = purrr::map2(age_start, age_end, ~.x:.y)) |> 
+  tidyr::unnest(age) |> 
+  filter(age >= settings_scenario4c$min_age,
+         age <= settings_scenario4c$max_age) |> 
+  left_join(prob_probabilistic, by = c("param", "age")) |> 
+  mutate(prob_distr = case_when(
+    distribution == "none" ~ NA,
+    distribution != "none" ~ prob_distr
+  )) |> 
+  select(-age) |> 
+  distinct()
+
+prob_source |> 
+  mutate(distr = case_when(
+    distribution == "truncnorm" ~ stringr::str_c("Truncated normal, se: ", se),
+    distribution == "beta" ~ stringr::str_c("Beta, shape1: ", nom, "; shape2: ", denom - nom),
+    distribution == "none" ~ "None"
+  )) |> 
+  select(explanation, `Age group` = agegroup,  Probability = prob, Distribution = distr, Density = prob_distr, Reference = reference) |> 
+  filter(explanation == "Hospital incidence") |> 
+  group_by(explanation) |>
+  gt() |> 
+  tab_header("Probabilities") |> 
+  fmt_number(columns = "Probability", decimals = 4) #|> 
+  #gtExtras::gt_plt_dist(Density, type = "density", same_limit = FALSE)
+  
+```
+
+## Results
+```{r}
+rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings_scenario4c, nice_table = T)
+```
+# Scenario 5a
+## Description of scenario
+In de base case hebben we een maximale duration of protection meegenomen van 48 maanden. In dit scenario verkennen we de mogelijkheid dat het vaccin een langere bescherming biedt van 60 maanden. 
+```{r}
+settings_scenario5 <- rsv_dectree$create_settings(
+  included_strategies = list(
+    no_vaccine = list(
+      name = "no_vaccine",
+      nice_name = "No vaccine",
+      settings_file = "no_vaccine",
+      administration = 3,
+      waning = "none",
+      price = 0
+    ),
+    rsv_generic_vaccine = list(
+      name = "rsv_generic_vaccine",
+      nice_name = "RSV generic vaccine",
+      settings_file = "rsv_generic_vaccine_scenario5",
+      administration = 3,
+      waning = "sigmoid",
+      price = 150
+    )
+)
+)
+
+rsv_res <- rsv_dectree$run(
+  settings = settings_scenario5,
+  probabilistic = probabilistic, 
+  iter = iter,
+  n_cores = n_cores,
+  ret = "incremental"
+)
+
+
+rsv_ceprice <-  rsv_dectree$calc_price(rsv_res, settings = settings_scenario5)
+
+res_scenario5 <- rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings_scenario5, nice_table = F) |> 
+  mutate(scenario_number = "5a",
+         scenario_name = "Reduced waning effect (60 months)")
+
+ceprice_scenario5 <- rsv_ceprice$price
+
+ceac_scenario5_originalprice <- rsv_dectree$create_ceac(
+  incremental_results = rsv_res,
+  settings = settings_scenario5
+)
+
+ceac_scenario5 <- rsv_dectree$create_ceac(
+  incremental_results = rsv_ceprice$new_incremental,
+  settings = settings_scenario5
+)
+
+```
+
+## Changed methods
+### Vaccine effectiveness
+```{r}
+
+## Load data ---------------------------------------------------------------
+rsv_dat <- rsv_dectree$load_data(settings_scenario5, probabilistic, iter)
+
+## Prep data ---------------------------------------------------------------
+rsv_prep <- rsv_dectree$prep_data(rsv_dat, settings_scenario5, probabilistic, iter)
+
+
+rsv_dat$vaccines$rsv_generic_vaccine$effectiveness |> 
+  mutate(effectiveness = map(effectiveness, ~tibble(iter = 1:iter, effectiveness = .x), iter),
+         date = lubridate::as_date(stringr::str_c(year, "-", month,"-1"))) |> 
+  tidyr::unnest(effectiveness) |> 
+  group_by(outcome, date) |> 
+  summarise(effect = mean(effectiveness),
+            low = quantile(effectiveness, .025),
+            high = quantile(effectiveness, .975),
+            .groups = "drop") |> 
+  ungroup() |> 
+  ggplot() +
+  geom_line(aes(x = date, y = effect)) +
+  geom_ribbon(aes(x = date, ymin = low, ymax = high), alpha = .2) +
+  facet_wrap(~outcome)
+
+```
+
+## Results
+```{r}
+rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings_scenario5, nice_table = T)
+```
+
+# Scenario 5b
+## Description of scenario
+In de base case hebben we een maximale duration of protection meegenomen van 48 maanden. In dit scenario verkennen we de mogelijkheid dat het vaccin een kortere bescherming biedt van 36 maanden. 
+```{r}
+settings_scenario5b <- rsv_dectree$create_settings(
+  included_strategies = list(
+    no_vaccine = list(
+      name = "no_vaccine",
+      nice_name = "No vaccine",
+      settings_file = "no_vaccine",
+      administration = 3,
+      waning = "none",
+      price = 0
+    ),
+    rsv_generic_vaccine = list(
+      name = "rsv_generic_vaccine",
+      nice_name = "RSV generic vaccine",
+      settings_file = "rsv_generic_vaccine_scenario5b",
+      administration = 3,
+      waning = "sigmoid",
+      price = 150
+    )
+)
+)
+
+rsv_res <- rsv_dectree$run(
+  settings = settings_scenario5b,
+  probabilistic = probabilistic, 
+  iter = iter,
+  n_cores = n_cores,
+  ret = "incremental"
+)
+
+
+rsv_ceprice <-  rsv_dectree$calc_price(rsv_res, settings = settings_scenario5b)
+
+res_scenario5b <- rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings_scenario5b, nice_table = F) |> 
+  mutate(scenario_number = "5b",
+         scenario_name = "Increased waning effect (36 months)")
+
+ceprice_scenario5b <- rsv_ceprice$price
+
+ceac_scenario5b_originalprice <- rsv_dectree$create_ceac(
+  incremental_results = rsv_res,
+  settings = settings_scenario5b
+)
+
+ceac_scenario5b <- rsv_dectree$create_ceac(
+  incremental_results = rsv_ceprice$new_incremental,
+  settings = settings_scenario5b
+)
+
+```
+
+## Changed methods
+### Vaccine effectiveness
+```{r}
+
+## Load data ---------------------------------------------------------------
+rsv_dat <- rsv_dectree$load_data(settings_scenario5b, probabilistic, iter)
+
+## Prep data ---------------------------------------------------------------
+rsv_prep <- rsv_dectree$prep_data(rsv_dat, settings_scenario5b, probabilistic, iter)
+
+
+rsv_dat$vaccines$rsv_generic_vaccine$effectiveness |> 
+  mutate(effectiveness = map(effectiveness, ~tibble(iter = 1:iter, effectiveness = .x), iter),
+         date = lubridate::as_date(stringr::str_c(year, "-", month,"-1"))) |> 
+  tidyr::unnest(effectiveness) |> 
+  group_by(outcome, date) |> 
+  summarise(effect = mean(effectiveness),
+            low = quantile(effectiveness, .025),
+            high = quantile(effectiveness, .975),
+            .groups = "drop") |> 
+  ungroup() |> 
+  ggplot() +
+  geom_line(aes(x = date, y = effect)) +
+  geom_ribbon(aes(x = date, ymin = low, ymax = high), alpha = .2) +
+  facet_wrap(~outcome)
+
+```
+
+## Results
+```{r}
+rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings_scenario5b, nice_table = T)
+```
+
+# Scenario 6
+## Description of scenario
+In de base case hebben we op basis van de expert meeting gekozen voor een sigmoidale curve om de waning van het RSV vaccin mee te nemen. In dit scenario verkennen we een lineaire en een exponentiële afname van de effectiviteit van het vaccin. 	
+
+```{r}
+settings_scenario6 <- rsv_dectree$create_settings(
+  included_strategies = list(
+    no_vaccine = list(
+      name = "no_vaccine",
+      nice_name = "No vaccine",
+      settings_file = "no_vaccine",
+      administration = 3,
+      waning = "none",
+      price = 0
+    ),
+    rsv_generic_vaccine = list(
+      name = "rsv_generic_vaccine",
+      nice_name = "RSV generic vaccine",
+      settings_file = "rsv_generic_vaccine",
+      administration = 3,
+      waning = "linear",
+      price = 150
+    )
+)
+)
+
+rsv_res <- rsv_dectree$run(
+  settings = settings_scenario6,
+  probabilistic = probabilistic, 
+  iter = iter,
+  n_cores = n_cores,
+  ret = "incremental"
+)
+
+
+rsv_ceprice <-  rsv_dectree$calc_price(rsv_res, settings = settings_scenario6)
+
+res_scenario6 <- rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings_scenario6, nice_table = F) |> 
+  mutate(scenario_number = "6",
+         scenario_name = "Linear waning effect")
+
+ceprice_scenario6 <- rsv_ceprice$price
+
+ceac_scenario6_originalprice <- rsv_dectree$create_ceac(
+  incremental_results = rsv_res,
+  settings = settings_scenario6
+)
+
+
+ceac_scenario6 <- rsv_dectree$create_ceac(
+  incremental_results = rsv_ceprice$new_incremental,
+  settings = settings_scenario6
+)
+
+```
+
+## Changed methods
+### Vaccine effectiveness
+```{r}
+
+## Load data ---------------------------------------------------------------
+rsv_dat <- rsv_dectree$load_data(settings_scenario6, probabilistic, iter)
+
+## Prep data ---------------------------------------------------------------
+rsv_prep <- rsv_dectree$prep_data(rsv_dat, settings_scenario6, probabilistic, iter)
+
+
+rsv_dat$vaccines$rsv_generic_vaccine$effectiveness |> 
+  mutate(effectiveness = map(effectiveness, ~tibble(iter = 1:iter, effectiveness = .x), iter),
+         date = lubridate::as_date(stringr::str_c(year, "-", month,"-1"))) |> 
+  tidyr::unnest(effectiveness) |> 
+  group_by(outcome, date) |> 
+  summarise(effect = mean(effectiveness),
+            low = quantile(effectiveness, .025),
+            high = quantile(effectiveness, .975),
+            .groups = "drop") |> 
+  ungroup() |> 
+  ggplot() +
+  geom_line(aes(x = date, y = effect)) +
+  geom_ribbon(aes(x = date, ymin = low, ymax = high), alpha = .2) +
+  facet_wrap(~outcome)
+
+```
+
+## Results
+```{r}
+rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings_scenario6, nice_table = T)
+```
+
+# Scenario 7
+## Description of scenario
+Uit een studie van Feldman et al. (doi: 10.1093/cid/ciad471) blijkt dat de incidentie van RSV-ARI en RSV-LRTD respectievelijk 36% en 68% hoger is bij deelnemers van 60 jaar en ouder met een ‘condition of interest’. Deze conditions of interest zijn aandoeningen die gepaard gaan met een verhoogd risico op een RSV-infectie, waaronder: Cardiorespiratoire aandoeningen (zoals chronische respiratoire of pulmonale ziekten [inclusief COPD, astma en andere aandoeningen] en chronisch hartfalen); Endocriene en metabole aandoeningen (zoals diabetes mellitus type 1 of 2, en gevorderde lever- of nieraandoeningen).
+In Scenario 7 onderzoeken we de kosteneffectiviteit van vaccinatie van risicogroepen, waarbij we de risicogroepindeling van influenza als uitgangspunt nemen.
+
+DIT IS NU BASE-CASE
+
+# Scenario 8
+## Description of scenario
+The healthcare perspective is used instead of the societal perspective
+
+```{r}
+settings_scenario8 <- rsv_dectree$create_settings()
+
+rsv_res <- rsv_dectree$run(
+  settings = settings_scenario8,
+  probabilistic = probabilistic, 
+  iter = iter,
+  n_cores = n_cores,
+  ret = "incremental"
+)
+
+rsv_ceprice <-  rsv_dectree$calc_price(rsv_res, settings = settings_scenario8, perspective = "healthcare")
+
+res_scenario8 <- rsv_dectree$calc_costeffectiveness(rsv_res, "healthcare", discount = TRUE, settings_scenario8, nice_table = F) |> 
+  mutate(scenario_number = "8",
+         scenario_name = "Healthcare perspective")
+
+ceprice_scenario8 <- rsv_ceprice$price
+
+ceac_scenario8_originalprice <- rsv_dectree$create_ceac(
+  incremental_results = rsv_res,
+  perspective = "healthcare",
+  settings = settings_scenario8
+)
+
+ceac_scenario8 <- rsv_dectree$create_ceac(
+  incremental_results = rsv_ceprice$new_incremental,
+  perspective = "healthcare",
+  settings = settings_scenario8
+)
+
+```
+
+## Results
+```{r}
+rsv_dectree$calc_costeffectiveness(rsv_res, "healthcare", discount = TRUE, settings_scenario8, nice_table = T)
+```
+
+# scenario 9a
+## Description of scenario
+No discounting of results.
+
+```{r}
+settings_scenario9 <- rsv_dectree$create_settings(
+  discount_rate = list(economic = 0, health = 0)
+)
+
+rsv_res <- rsv_dectree$run(
+  settings = settings_scenario9,
+  probabilistic = probabilistic, 
+  iter = iter,
+  n_cores = n_cores,
+  ret = "incremental"
+)
+
+rsv_ceprice <-  rsv_dectree$calc_price(rsv_res, settings = settings_scenario9, perspective = "societal")
+
+res_scenario9 <- rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings_scenario9, nice_table = F) |> 
+  mutate(scenario_number = "9",
+         scenario_name = "No discounting of results")
+
+ceprice_scenario9 <- rsv_ceprice$price
+
+ceac_scenario9_originalprice <- rsv_dectree$create_ceac(
+  incremental_results = rsv_res,
+  settings = settings_scenario9
+)
+
+ceac_scenario9 <- rsv_dectree$create_ceac(
+  incremental_results = rsv_ceprice$new_incremental,
+  perspective = "societal",
+  settings = settings_scenario9
+)
+
+```
+
+## Results
+```{r}
+rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings_scenario9, nice_table = T)
+```
+
+# scenario 9b
+## Description of scenario
+Equal discounting with 3%.
+
+```{r}
+settings_scenario9b <- rsv_dectree$create_settings(
+  discount_rate = list(economic = 0.03, health = 0.03)
+)
+
+rsv_res <- rsv_dectree$run(
+  settings = settings_scenario9b,
+  probabilistic = probabilistic, 
+  iter = iter,
+  n_cores = n_cores,
+  ret = "incremental"
+)
+
+rsv_ceprice <-  rsv_dectree$calc_price(rsv_res, settings = settings_scenario9b, perspective = "societal")
+
+res_scenario9b <- rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings_scenario9b, nice_table = F) |> 
+  mutate(scenario_number = "9b",
+         scenario_name = "Equal discounting of results with 3%")
+
+ceprice_scenario9b <- rsv_ceprice$price
+
+ceac_scenario9b_originalprice <- rsv_dectree$create_ceac(
+  incremental_results = rsv_res,
+  settings = settings_scenario9b
+)
+
+ceac_scenario9b <- rsv_dectree$create_ceac(
+  incremental_results = rsv_ceprice$new_incremental,
+  perspective = "societal",
+  settings = settings_scenario9
+)
+
+```
+
+## Results
+```{r}
+rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings_scenario9b, nice_table = T)
+```
+
+# Scenario 10
+## Description of scenario
+Indirect medical costs are included in the analysis.
+
+```{r}
+settings_scenario10 <- rsv_dectree$create_settings(
+  indirect_medical = "negative"
+)
+
+rsv_res <- rsv_dectree$run(
+  settings = settings_scenario10,
+  probabilistic = probabilistic, 
+  iter = iter,
+  n_cores = n_cores,
+  ret = "incremental"
+)
+
+rsv_ceprice <-  rsv_dectree$calc_price(rsv_res, settings = settings_scenario10, perspective = "societal")
+
+res_scenario10 <- rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings_scenario10, nice_table = F) |> 
+  mutate(scenario_number = "10",
+         scenario_name = "Inclusion of indirect medical costs")
+
+ceprice_scenario10 <- rsv_ceprice$price
+
+ceac_scenario10_originalprice <- rsv_dectree$create_ceac(
+  incremental_results = rsv_res,
+  settings = settings_scenario10
+)
+
+ceac_scenario10 <- rsv_dectree$create_ceac(
+  incremental_results = rsv_ceprice$new_incremental,
+  perspective = "societal",
+  settings = settings_scenario10
+)
+
+```
+
+## Results
+```{r}
+rsv_dectree$calc_costeffectiveness(rsv_res, "societal", discount = TRUE, settings_scenario10, nice_table = T)
+```
+
+
+# Overview of all scenarios
+
+## Large table
+
+```{r}
+name_reference <- settings_basecase$included_strategies$no_vaccine$nice_name
+name_intervention <- settings_basecase$included_strategies$rsv_generic_vaccine$nice_name
+    
+scenario_overview <- bind_rows(
+  res_basecase,
+  res_scenario1,
+  res_scenario2,
+  res_scenario3a,
+  res_scenario3b,
+  res_scenario4,
+  res_scenario4b,
+  res_scenario4c,
+  res_scenario5,
+  res_scenario5b,
+  res_scenario6,
+  res_scenario8,
+  res_scenario9,
+  res_scenario9b,
+  res_scenario10
+) |> 
+      mutate(rowname = case_when(
+        category == "costs" ~ "Costs",
+        category == "qalys" ~ "QALYs lost",
+        category == "life years" ~ "Life years lost"
+      ),
+      scenario_val = stringr::str_c(scenario_number, ": ", scenario_name),
+      ) |> 
+      select(rowname, value_reference, value_intervention, value_incremental, icer,scenario_val) |> 
+      group_by(scenario_val) 
+
+cost_rows <- ((1:(nrow(scenario_overview))*3)-2)[1:((nrow(scenario_overview))/3)]
+
+scenario_overview |> 
+      gt::gt(rowname_col = "rowname") |> 
+      gt::cols_label(
+        value_reference = name_reference,
+        value_intervention = name_intervention,
+        value_incremental = "Incremental",
+        icer = "ICER"
+      ) |> 
+      gt::fmt_currency(rows = cost_rows, currency = settings_basecase$currency, decimals = 0)  |> 
+      gt::fmt_number(rows = (1:nrow(scenario_overview))[-cost_rows], decimals = 0) |> 
+      gt::sub_missing(columns = 5, missing_text = " ") |> 
+      gt::fmt_currency(columns = 5, currency = settings_basecase$currency, decimals = 0) |> 
+      gt::tab_source_note("ICER: incremental cost effectiveness ratio; QALY: quality adjusted life year")
+```
+
+## Cost-effective prices
+```{r}
+ceac_list <- list(ceac_basecase, 
+                  ceac_scenario1, 
+                  ceac_scenario2,
+                  ceac_scenario3a, 
+                  ceac_scenario3b,
+                  ceac_scenario4,
+                  ceac_scenario4b,
+                  ceac_scenario4c,
+                  ceac_scenario5,
+                  ceac_scenario5b,
+                  ceac_scenario6,
+                  ceac_scenario8,
+                  ceac_scenario9,
+                  ceac_scenario9b,
+                  ceac_scenario10)
+
+ceac_list_original <- list( ceac_basecase_originalprice, 
+                            ceac_scenario1_originalprice, 
+                            ceac_scenario2_originalprice,
+                            ceac_scenario3a_originalprice, 
+                            ceac_scenario3b_originalprice,
+                            ceac_scenario4_originalprice,
+                            ceac_scenario4b_originalprice,
+                            ceac_scenario4c_originalprice,
+                            ceac_scenario5_originalprice,
+                            ceac_scenario5b_originalprice,
+                            ceac_scenario6_originalprice,
+                            ceac_scenario8_originalprice,
+                            ceac_scenario9_originalprice,
+                            ceac_scenario9b_originalprice,
+                            ceac_scenario10_originalprice)
+
+ceac_fn <- function(x, list){
+  plot <- list[[x]] +
+    geom_line(linewidth = 2) +
+    geom_vline(aes(xintercept = 50000),
+                   color = "#333",
+                   linetype = 2,
+                   linewidth = 2) +
+    scale_x_continuous(breaks = c(0,80000), name = "WTP", limits = c(0,80000))+
+    scale_y_continuous(breaks = c(0,.5, 1), name = "P CE", limits = c(0,1))+
+    theme(panel.grid.major.x = element_blank(), panel.grid.minor.x = element_blank(),
+          panel.grid.major.y = element_blank(), panel.grid.minor.y = element_blank())
+  return(plot)
+}
+scenario_overview |> 
+  filter(rowname == "QALYs lost") |> 
+  select(scenario_val, icer) |> 
+  bind_cols(
+    tibble(
+      ceac_original = 1:length(ceac_list_original),
+      ce_price = c(ceprice_basecase, ceprice_scenario1, ceprice_scenario2, ceprice_scenario3a, ceprice_scenario3b, ceprice_scenario4, ceprice_scenario4b, ceprice_scenario4c, ceprice_scenario5, ceprice_scenario5b, ceprice_scenario6, ceprice_scenario8, ceprice_scenario9, ceprice_scenario9b, ceprice_scenario10),
+      ceac = 1:length(ceac_list)
+    )
+  ) |> 
+  ungroup() |> 
+  gt() |> 
+  text_transform(
+    locations = cells_body(columns = ceac_original),
+    fn = function(x){
+      purrr::map(1:length(ceac_list_original), ~ceac_fn(.x, ceac_list_original)) |> 
+         ggplot_image(height = px(50), aspect_ratio = 3)
+    }
+  ) |> 
+  text_transform(
+    locations = cells_body(columns = ceac),
+    fn = function(x){
+      purrr::map(1:length(ceac_list), ~ceac_fn(.x, ceac_list)) |> 
+         ggplot_image(height = px(50), aspect_ratio = 3)
+    }
+  ) |> 
+  gt::cols_label(
+        scenario_val = "Scenario",
+        icer = "ICER",
+        ce_price = "CE vaccine price",
+        ceac_original = "CEAC",
+        ceac = "CEAC at CE price"
+      ) |> 
+      gt::fmt_currency(columns = c(2,4), currency = settings_basecase$currency, decimals = 0)  |> 
+      gt::tab_source_note("CE: cost effective, CEAC: cost-effectiveness acceptability curve, ICER: incremental cost effectiveness ratio") |> 
+  gt::tab_footnote("Considering a willingness to pay of €50,000 per QALY", locations = cells_column_labels("ce_price")) |> 
+  gt::tab_footnote("Dotted line indicating a willingness to pay of €50,000 per QALY", locations = cells_column_labels("ceac"))
+```
+

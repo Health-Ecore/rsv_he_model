@@ -1,0 +1,21 @@
+cost_category,cost_item,start_age,end_age,mean,sd,distribution,currency_year,perspective_hc,perspective_soc,reference
+hospitalization,"hospitalization, general ward",0,9,2548,679,gamma,2011,TRUE,TRUE,Rozenbaum 2015
+hospitalization,"hospitalization, general ward",10,17,2908,1040,gamma,2011,TRUE,TRUE,Rozenbaum 2015
+hospitalization,"hospitalization, general ward",18,49,5141,625,gamma,2011,TRUE,TRUE,Rozenbaum 2015
+hospitalization,"hospitalization, general ward",50,64,5153,594,gamma,2011,TRUE,TRUE,Rozenbaum 2015
+hospitalization,"hospitalization, general ward",65,74,5148,567,gamma,2011,TRUE,TRUE,Rozenbaum 2015
+hospitalization,"hospitalization, general ward",75,84,5148,570,gamma,2011,TRUE,TRUE,Rozenbaum 2015
+hospitalization,"hospitalization, general ward",85,100,5177,626,gamma,2011,TRUE,TRUE,Rozenbaum 2015
+hospitalization,"hospitalization, including ICU",0,9,11567,11992,gamma,2011,TRUE,TRUE,Rozenbaum 2015
+hospitalization,"hospitalization, including ICU",10,17,15860,49851,gamma,2011,TRUE,TRUE,Rozenbaum 2015
+hospitalization,"hospitalization, including ICU",18,49,14229,13771,gamma,2011,TRUE,TRUE,Rozenbaum 2015
+hospitalization,"hospitalization, including ICU",50,64,16374,19042,gamma,2011,TRUE,TRUE,Rozenbaum 2015
+hospitalization,"hospitalization, including ICU",65,74,16005,19568,gamma,2011,TRUE,TRUE,Rozenbaum 2015
+hospitalization,"hospitalization, including ICU",75,84,14543,17959,gamma,2011,TRUE,TRUE,Rozenbaum 2015
+hospitalization,"hospitalization, including ICU",85,100,11250,10547,gamma,2011,TRUE,TRUE,Rozenbaum 2015
+vaccination,administration costs,0,100,14.85,,none,2023,TRUE,TRUE,SNPG 2023
+nma,non-medicaly attended costs,60,100,3.64,3.73,gamma,2020,FALSE,TRUE,Mao 2020
+gp,transport costs gp visit,60,100,2.55,2.96,gamma,2020,TRUE,TRUE,Mao 2020
+medication,medication following gp visit,60,100,27.61,27.47,gamma,2020,TRUE,TRUE,Mao 2020
+adverse events,"adverse event, grade 3",0,100,0.24,,none,2023,TRUE,TRUE,Medicijnkosten.nl/ Zeevat et al 2024 - COVID-19 
+adverse events,"adverse event, severe",0,100,24160,22996,gamma,2010,TRUE,TRUE,"van Leeuwen, N., Lingsma, H. F., Vanrolleghem, A. M., Sturkenboom, M. C., van Doorn, P. A., Steyerberg, E. W., & Jacobs, B. C. (2016). Hospital admissions, transfers and costs of Guillain-Barré syndrome. PLoS One, 11(2), e0143837."

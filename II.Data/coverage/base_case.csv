@@ -1,0 +1,5 @@
+age_start,age_end,coverage,reference
+60,64,0.6,assumption
+65,69,0.6,assumption
+70,79,0.6,assumption
+80,100,0.6,assumption
