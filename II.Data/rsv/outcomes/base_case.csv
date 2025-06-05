@@ -1,0 +1,19 @@
+category,item,start_age,end_age,mean,sd,distribution,reference
+decrement,utility decrement (average),0,100,0.198,0.005,gamma,Van Dorst et al. (paper under review)
+decrement,utility decrement (mild),0,100,0.159,0.005,gamma,Van Dorst et al. (paper under review)
+duration,non-gp attended care,0,100,7.70,0.38,gamma,Van der Pol 2024
+productivity_factor,non-gp attended care,0,100,0.50,,none,assumption
+productivity_factor,gp-attended care,0,100,0.50,,none,assumption
+duration,gp-attended care,0,100,11.45,0.16,gamma,Van Dorst et al. (paper under review)
+duration,hospitalization,50,64,4.03,7.15,gamma,Rozenbaum 2015
+duration,hospitalization,65,74,5.2,7.94,gamma,Rozenbaum 2015
+duration,hospitalization,75,84,6.2,7.68,gamma,Rozenbaum 2015
+duration,hospitalization,85,100,6.5,7.41,gamma,Rozenbaum 2015
+qaly_loss,QALY loss following hospitalization,0,100,0.11,0.014,gamma,Mangen 2017
+qaly_loss,local adverse event,0,100,0.0000,,none,assumption
+qaly_loss,systemic adverse event,50,64,0.0011,4.59184E-05,gamma,"Kim Deluca, 2023"
+qaly_loss,systemic adverse event,65,99,0.00312,0.000132653,gamma,"Kim Deluca, 2023"
+qaly_loss,severe adverse event,0,100,0.1410,0.027295918,gamma,"Prosser, 2006/ CDC model"
+duration,severe adverse event,18,100,39.68,29.59183673,gamma,"Prosser, 2008/ CDC model"
+life_expectancy,life expectancy nursing homes (years),18,100,0.14,0.14,gamma,"Assumption, Bär 2024"
+decrement,utility decrement nursing home,18,100,0,,none,Pig?owska 2023

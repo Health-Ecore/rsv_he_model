@@ -1,0 +1,13 @@
+age_start,age_end,risk group,coverage,reference
+60,64,average,0.6,assumption
+65,69,average,0.6,assumption
+70,79,average,0.6,assumption
+80,100,average,0.6,assumption
+60,64,low,0.6,assumption
+65,69,low,0.6,assumption
+70,79,low,0.6,assumption
+80,100,low,0.6,assumption
+60,64,high,0.6,assumption
+65,69,high,0.6,assumption
+70,79,high,0.6,assumption
+80,100,high,0.6,assumption

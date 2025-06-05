@@ -1,0 +1,55 @@
+---
+name: no vaccine
+cost: 0
+effect:
+  non_medical:
+    initial:
+      point: 0
+      low: 0
+      high: 0
+      ref: none
+    monthly_waning: 0
+  out_upper:
+    initial:
+      point: 0
+      low: 0
+      high: 0
+      ref: none
+    monthly_waning: 0
+  out_lower:
+    initial:
+      point: 0
+      low: 0
+      high: 0
+      ref: none
+    monthly_waning: 0
+  hosp:
+    initial:
+      point: 0
+      low: 0
+      high: 0
+      ref: none
+    monthly_waning: 0
+  hosp_upper:
+    initial:
+      point: 0
+      low: 0
+      high: 0
+      ref: Not used in base case
+    monthly_waning: 0
+  hosp_lower:
+    initial:
+      point: 0
+      low: 0
+      high: 0
+      ref: Not used in base case
+    monthly_waning: 0
+  mort:
+    initial:
+      point: 0
+      low: 0
+      high: 0
+      ref: none
+    monthly_waning: 0
+
+  

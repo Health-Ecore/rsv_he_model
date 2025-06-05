@@ -1,0 +1,76 @@
+---
+name: generic RSV vaccine
+cost: 150
+effect:
+  non_medical:
+    initial:
+      point: .68
+      low: .585
+      high: .753
+      ref: Zeng et al
+    linear_waning_stable: 12
+    linear_waning_zero: 48
+    sigmoid_waning_stable: 12
+    sigmoid_waning_zero: 48
+  out_upper:
+    initial:
+      point: .68
+      low: .585
+      high: .753
+      ref: Zeng et al
+    linear_waning_stable: 12
+    linear_waning_zero: 48
+    sigmoid_waning_stable: 12
+    sigmoid_waning_zero: 48
+  out_lower:
+    initial:
+      point: .783
+      low: .656
+      high: .863
+      ref: Zeng et al
+    linear_waning_stable: 12
+    linear_waning_zero: 48
+    sigmoid_waning_stable: 12
+    sigmoid_waning_zero: 48
+  hosp:
+    initial:
+      point: .8
+      low: .71
+      high: .85
+      ref: Payne et al
+    linear_waning_stable: 12
+    linear_waning_zero: 48
+    sigmoid_waning_stable: 12
+    sigmoid_waning_zero: 48
+  hosp_upper:
+    initial:
+      point: 0
+      low: 0
+      high: 0
+      ref: Not used in base case
+    linear_waning_stable: 12
+    linear_waning_zero: 48
+    sigmoid_waning_stable: 12
+    sigmoid_waning_zero: 48
+  hosp_lower:
+    initial:
+      point: 0
+      low: 0
+      high: 0
+      ref: Not used in base case
+    linear_waning_stable: 12
+    linear_waning_zero: 48
+    sigmoid_waning_stable: 12
+    sigmoid_waning_zero: 48
+  mort:
+    initial:
+      point: 0
+      low: 0
+      high: 0
+      ref: Not used in base case
+    linear_waning_stable: 12
+    linear_waning_zero: 48
+    sigmoid_waning_stable: 12
+    sigmoid_waning_zero: 48
+
+  

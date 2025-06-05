@@ -1,0 +1,39 @@
+explanation,agegroup,category,param,age_start,age_end,nom,denom,se,distribution,reference
+Hospital incidence,18-64,all,p_hosp_inc_all,18,64,58.00,100000,0.00009,truncnorm,Johannesen 2025
+Hospital incidence,65-74,all,p_hosp_inc_all,65,74,87.00,100000,0.00013,truncnorm,Johannesen 2025
+Hospital incidence,75-84,all,p_hosp_inc_all,75,84,222.00,100000,0.00033,truncnorm,Johannesen 2025
+Hospital incidence,85+,all,p_hosp_inc_all,85,100,483.00,100000,0.00072,truncnorm,Johannesen 2025
+Probability ICU,0-9,all,p_hosp_icu,0,9,70,16809,,beta,Rozenbaum 2014
+Probability ICU,10-17,all,p_hosp_icu,10,17,33,1743,,beta,Rozenbaum 2014
+Probability ICU,18-49,all,p_hosp_icu,18,49,1071,16085,,beta,Rozenbaum 2014
+Probability ICU,50-64,all,p_hosp_icu,50,59,1900,19290,,beta,Rozenbaum 2014
+Probability ICU,60-64,all,p_hosp_icu,60,64,6,46,,beta,Korsten 2025
+Probability ICU,65-74,all,p_hosp_icu,65,74,19,133,,beta,Korsten 2025
+Probability ICU,75-84,all,p_hosp_icu,75,84,8,105,,beta,Korsten 2025
+Probability ICU,85+,all,p_hosp_icu,85,100,1,71,,beta,Korsten 2025
+Hospital case-fatality rate,18-59,all,p_hosp_cfr,18,59,0,100,,none,assumption
+Hospital case-fatality rate,60-64,all,p_hosp_cfr,60,64,2,47,,beta,Korsten 2025
+Hospital case-fatality rate,65-74,all,p_hosp_cfr,65,74,8,133,,beta,Korsten 2025
+Hospital case-fatality rate,70-79,all,p_hosp_cfr,70,79,6,77,,beta,Korsten 2025
+Hospital case-fatality rate,80+,all,p_hosp_cfr,80,100,11,88,,beta,Korsten 2025
+Probability of GP visit for patients infected with RSV,all,arti,p_gp_visit,18,100,11,36,,beta,Korsten 2021
+"General practitioner, percentage URTI",all,urti,p_gp_urti,0,100,229,929,,beta,Jansen 2008
+General practitioner visits RSV+,50-54 ,all,p_gp_rsv,50,54,0.913,100,0.0014,truncnorm,NIVEL 2024
+General practitioner visits RSV+,55-59 ,all,p_gp_rsv,55,59,0.997,100,0.0015,truncnorm,NIVEL 2024
+General practitioner visits RSV+,60-64,all,p_gp_rsv,60,64,1.030,100,0.0015,truncnorm,NIVEL 2024
+General practitioner visits RSV+,65-69 ,all,p_gp_rsv,65,69,0.977,100,0.0015,truncnorm,NIVEL 2024
+General practitioner visits RSV+,70-74 ,all,p_gp_rsv,70,74,0.953,100,0.0014,truncnorm,NIVEL 2024
+General practitioner visits RSV+,75-79 ,all,p_gp_rsv,75,79,1.077,100,0.0016,truncnorm,NIVEL 2024
+General practitioner visits RSV+,80-84 ,all,p_gp_rsv,80,84,1.257,100,0.0019,truncnorm,NIVEL 2024
+General practitioner visits RSV+,85+,all,p_gp_rsv,85,100,1.533,100,0.0023,truncnorm,NIVEL 2024
+Emergency department visits leading to hospitalization,0-59,all,p_ed_hosp,0,59,46,65,,beta,Korsten 2025
+Emergency department visits leading to hospitalization,60+,all,p_ed_hosp,60,100,217,283,,beta,Korsten 2025
+Adverse event: Any Grade 3 local ,all,all,p_ae_local,18,100,0.015,1,0.0015,truncnorm,Average calculated from RSV trials
+Adverse event: Any Grade 3 systemic ,all,all,p_ae_syst,18,100,0.026,1,0.0026,truncnorm,Average calculated from RSV trials
+Adverse event: Guillain Barre syndrome,all,all,p_ae_gbs,18,100,8,1000000,0.0000,truncnorm,acip Oct 2024
+Mortality in nursing homes due to lrtd (annual),all,all,p_nurhom_mort,18,100,0.102,1,0.0031,truncnorm,Manyam 2024
+Mortality nursing homes due to RSV (as a percentage of lrtd mortality),all,all,p_nurhom_mort_rsv,18,100,59,557,,beta,assumption
+,,,,,,,,,,
+,,,,,,,,,,
+,,,,,,,,,,
+,,,,,,,,,,

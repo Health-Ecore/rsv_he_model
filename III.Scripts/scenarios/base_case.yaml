@@ -1,0 +1,35 @@
+---
+population: #population to be included in the analysis, as well as the vaccination coverage within the group
+            #note that this should be in order from younger age categories to older age categories
+  - 50-59
+  - 60-64
+  - 65-69
+  - 70-79
+  - 80-89
+  - 90+
+min_age: 70
+max_age: 95
+cohort_type: closed
+vaccinate_new_cohort: false
+included_strategies: #included vaccines in the analysis, administration number of years between administrations
+  no_vaccine:
+    name: no_vaccine
+    administration: 1
+    waning: none
+  rsv_generic_vaccine:
+    name: rsv_generic_vaccine
+    administration: 1
+    waning: sigmoid
+start_year: 2025 #start year of the analysis
+start_month: 10
+n_years: 3 #number of years to run the analysis
+probabilities: base_case
+costs: base_case
+outcomes: base_case
+seasonality: nl_pop
+currency_year: 2024 #currency year to use
+discount_rate: #discount rate to be used in analysis
+  health: .015
+  economic: .03
+productivity_method: friction #method to incorporate productivity losses. This can be either "friction" or "none"
+

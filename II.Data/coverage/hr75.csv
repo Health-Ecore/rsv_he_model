@@ -1,0 +1,16 @@
+age_start,age_end,risk group,coverage,reference
+60,64,average,0,Assumption
+65,69,average,0,Assumption
+70,74,average,0,Assumption
+75,79,average,0,Assumption
+80,100,average,0,Assumption
+60,64,low,0,Assumption
+65,69,low,0,Assumption
+70,74,low,0,Assumption
+75,79,low,0.688,Monitor Vaccinatiegraad Nationaal Programma Grieppreventie (NPG) 2031
+80,100,low,0.71,Monitor Vaccinatiegraad Nationaal Programma Grieppreventie (NPG) 2032
+60,64,high,0.522,Monitor Vaccinatiegraad Nationaal Programma Grieppreventie (NPG) 2033
+65,69,high,0.652,Monitor Vaccinatiegraad Nationaal Programma Grieppreventie (NPG) 2034
+70,74,high,0.716,Monitor Vaccinatiegraad Nationaal Programma Grieppreventie (NPG) 2035
+75,79,high,0.765,Monitor Vaccinatiegraad Nationaal Programma Grieppreventie (NPG) 2036
+80,100,high,0.771,Monitor Vaccinatiegraad Nationaal Programma Grieppreventie (NPG) 2037
