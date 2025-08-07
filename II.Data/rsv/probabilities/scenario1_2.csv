@@ -14,7 +14,7 @@ Probability ICU,85+,all,p_hosp_icu,85,100,1,71,,beta,Korsten 2025
 Hospital case-fatality rate,18-59,all,p_hosp_cfr,18,59,0,100,,none,assumption
 Hospital case-fatality rate,60-64,all,p_hosp_cfr,60,64,2,47,,beta,Korsten 2025
 Hospital case-fatality rate,65-74,all,p_hosp_cfr,65,74,8,133,,beta,Korsten 2025
-Hospital case-fatality rate,70-79,all,p_hosp_cfr,70,79,6,77,,beta,Korsten 2025
+Hospital case-fatality rate,75-79,all,p_hosp_cfr,70,79,6,77,,beta,Korsten 2025
 Hospital case-fatality rate,80+,all,p_hosp_cfr,80,100,11,88,,beta,Korsten 2025
 Probability of GP visit for patients infected with RSV,all,arti,p_gp_visit,18,100,11,36,,beta,Korsten 2021
 "General practitioner, percentage URTI",all,urti,p_gp_urti,0,100,229,929,,beta,Jansen 2008

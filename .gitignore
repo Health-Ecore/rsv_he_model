@@ -47,12 +47,10 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
-
-
 II.Data/uti/10.1007_978-94-007-7596-1.pdf
 
 /.quarto/
 
 # Results
-V. Output/results/
+V. Output/analyses/
 *.parquet
