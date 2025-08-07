@@ -245,7 +245,7 @@ load_data <- function(settings, probabilistic = FALSE, iter = 1000){
   
   costs <- bind_rows(costs_import, ref_prices)
   
-  indirect_medical <- paid$import(settings$currency_year)
+
   
 
 # Seasonality -------------------------------------------------------------
@@ -265,6 +265,17 @@ load_data <- function(settings, probabilistic = FALSE, iter = 1000){
 
   productivity_import <- productivity$import_labour(minimum_age = settings$min_age, 
                                                     maximum_age = settings$max_age + settings$n_years - 1)
+  
+
+# Indirect medical costs --------------------------------------------------
+
+  le <- value(le)
+  
+  indirect_medical <- paid$import(settings$currency_year) |> 
+    paid$prep_paid(le = le, 
+                   min_age = settings$min_age,
+                   year = settings$start_year,
+                   d_rate = settings$discount_rate$economic)
 
 # Return ------------------------------------------------------------------
 
@@ -273,7 +284,7 @@ return(
     probs = probabilities,
     costs = costs,
     outcomes = outcomes,
-    le = value(le),
+    le = le,
     qol = utilities$import_qol("nl"),
     seasonality = seasonality_import,
     vaccines = value(vac_out),
@@ -282,6 +293,10 @@ return(
   )
 )
 }
+
+
+# Prep functions -----------------------------------------------------------
+
 
 #' Prepare data for analysis
 #'
@@ -320,19 +335,11 @@ prep_data <- function(data, settings, probabilistic = FALSE, iter = 1000){
     tidyr::nest(.by = "age", .key = "outcomes")
 
   
-  indirect_medical <- paid$prep_paid(indirect_medical = data$indirect_medical,
-                                     le = data$le,
-                                     min_age = settings$min_age,
-                                     year = settings$start_year,
-                                     d_rate = settings$discount_rate$economic) |> 
-    tidyr::nest(.by = "age", .key = "indirect_medical_costs")
-  
   ret <- probs |> 
     left_join(costs, by = "age") |> 
     left_join(outcomes, by = "age") |> 
     left_join(value(le), by = "age") |> 
     left_join(productivity, by = "age") |> 
-    left_join(indirect_medical, by = "age") |> 
     mutate(le_nursing = value(le_nursing))
   
   
@@ -626,6 +633,9 @@ prep_data_nursing_mort <- function(data, qol, probabilistic, iter, settings){
 
 
 
+# Model run functions -----------------------------------------------------
+
+
 #' Quick run of RSV model
 #'
 #' @param settings settings file
@@ -643,7 +653,6 @@ run <- function(settings,
                 probabilistic = FALSE, 
                 iter = 1, 
                 n_cores = 1, 
-                ret = "incremental",
                 time_step = "annual"){
   if(n_cores > 1){
     plan(multisession, workers = n_cores)
@@ -737,236 +746,40 @@ run <- function(settings,
   
   if(time_step == "monthly"){
     rsv_runmodel <- population |> 
-      left_join(rsv_prep, by = "age") |> 
-      mutate( probs = future_pmap(list(risk_group, probs, age, month, year), apply_riskstratification, pop_start, .options = furrr_opts),
+      left_join(select(rsv_prep, age, probs, costs), by = "age") |> 
+      mutate( costs = map2(costs, strategy, apply_strategy_costs, settings),
+              probs = future_pmap(list(risk_group, probs, age, month, year), apply_riskstratification, pop_start, .options = furrr_opts),
               probs = future_map2(month, probs, add_seasonality, rsv_dat$seasonality, .options = furrr_opts),
               vac_effect = pmap(list(month, year, strategy, vaccine_status), add_vaccine_effect, rsv_dat)) |> 
       filter(!(month %in% settings$exluded_months)) |> 
       mutate( tree = future_pmap(list(population, probs, vac_effect, prop_nursing), run_tree, settings, .options = furrr_opts),
-              results = future_pmap(list(month, year, tree, costs, productivity, outcomes, le, le_nursing, indirect_medical_costs, strategy, vaccine_status, population, probs), calc_results, rsv_dat, probabilistic, iter, settings,
-                                    .options = furrr_opts))
+              results = future_pmap(list(month, year, age, tree, costs, strategy, vaccine_status, population, probs), calc_results, rsv_dat, rsv_prep, probabilistic, iter, settings,
+                                    .options = furrr_opts)) |> 
+      select(strategy, year, month, age_cat, age, risk_group, population, vaccine_status, date, season, results)
+    
   } else if(time_step == "annual"){
     rsv_runmodel <- population |> 
-      left_join(rsv_prep, by = "age") |> 
-      mutate( probs = pmap(list(risk_group, probs, age, month, year), apply_riskstratification, pop_start),
+      left_join(select(rsv_prep, age, probs, costs), by = "age") |> 
+      mutate( costs = map2(costs, strategy, apply_strategy_costs, settings),
+              probs = pmap(list(risk_group, probs, age, month, year), apply_riskstratification, pop_start),
               vac_effect = pmap(list(month, year, strategy, vaccine_status), add_vaccine_effect, rsv_dat), 
               tree = pmap(list(population, probs, vac_effect, prop_nursing), run_tree, settings),
-              results = future_pmap(list(month, year, tree, costs, productivity, outcomes, le, le_nursing, indirect_medical_costs, strategy, vaccine_status, population, probs), calc_results, rsv_dat, probabilistic, iter, settings,
-                                    .options = furrr_opts))
+              results = future_pmap(list(month, year, age, tree, costs, strategy, vaccine_status, population, probs), calc_results, rsv_dat, rsv_prep, probabilistic, iter, settings,
+                                    .options = furrr_opts)) |> 
+      select(strategy, year, month, age_cat, age, risk_group, population, vaccine_status, date, season, results)
   }
+  
+
   
   if(n_cores > 1){
     plan(sequential)
   }
   
-  
-  
-  ## Explore results ---------------------------------------------------------
-  rsv_results <- rsv_runmodel |> 
-    select(strategy, season, date, age_cat, age, risk_group, population, results) |> 
-    tidyr::unnest(results)
-  
-  
-  
-  if(ret == "incremental"){
-    rm(rsv_runmodel)
-    rsv_incremental <- calc_incremental(rsv_results, 
-                                        "no_vaccine", 
-                                        "rsv_generic_vaccine")
-    gc()
-    
-    return(rsv_incremental)
-  } else if (ret == "all"){
-    rsv_incremental <- calc_incremental(rsv_results, 
-                                        "no_vaccine", 
-                                        "rsv_generic_vaccine")
-    gc()
-    
-    return(list(
-      results = rsv_results,
-      incremental = rsv_incremental,
-      data = rsv_dat,
-      raw_data = rsv_runmodel
-    ))
-  } else if(ret == "summarise"){
-    summarised <- summarise_results(
-      rsv_results, settings = settings
-    )
-    gc()
-    
-    return(summarised)
-  } else if(ret == "tidy"){
-    gc()
-    return(rsv_results)
-  } 
-}
-
-#' Quick run of one strategy
-#'
-#' @param settings settings file
-#' @param iter number of iterations
-#' @param n_cores number of cores
-#' @param ret option to set data to return, default is "incremental"
-#' @param probabilistic TRUE or FALSE (default), to run the model probabilistic
-#' @param time_step "monthly" (default) or "annual", to change the time step in the model
-#' @param selected_strategy strategy to run
-#'
-#' @return
-#' @export
-#'
-#' @examples
-run_strategy <- function(selected_strategy,
-                settings, 
-                rsv_prep,
-                rsv_dat,
-                probabilistic = FALSE, 
-                iter = 1, 
-                ret = "tidy",
-                time_step = "monthly"){
-
-  furrr_opts <- furrr_options(
-    globals = FALSE,
-    packages = NULL,
-    seed = TRUE
-  )
-  
-
-  if(time_step == "monthly"){
-    demographic_interval <- "month"
-  } else if(time_step == "annual"){
-    demographic_interval <- "year"
-    
-    ### CODE TO CHANGE MONTHLY VACCINE EFFECTIVENESS TO ANNUAL ###
-    annual_effectiveness <- map(rsv_dat$vaccines, function(x, settings, rsv_dat){
-      
-      
-      new_eff <- x$effectiveness |> 
-        left_join(select(rsv_dat$seasonality, month, prop_cases), by = "month") |> 
-        mutate(eff_year = case_when(
-          month >= settings$start_month ~ year + 1,
-          month < settings$start_month ~ year
-        ),
-        weighed_eff = map2(effectiveness, prop_cases, ~ tibble(iter = 1:length(.x),
-                                                               effectiveness = .x * .y))) |> 
-        select(-effectiveness) |> 
-        tidyr::unnest(weighed_eff) |> 
-        group_by(iter, eff_year, outcome) |> 
-        summarise(effectiveness = sum(effectiveness),
-                  month = 1,
-                  .groups = "drop") |> 
-        group_by(outcome, month, eff_year) |> 
-        tidyr::nest() |> 
-        mutate(effectiveness = map(data, ~.x$effectiveness)) |> 
-        ungroup() |> 
-        select(outcome, month, effectiveness, year = eff_year)
-      
-      x$effectiveness <- new_eff
-      return(x)
-      
-    }, settings, rsv_dat)
-    
-    rsv_dat$vaccines <- annual_effectiveness
-    
-  } else {
-    stop("Time step should be either monthly or annual")
-  }
-  
-  pop_start <- demographics$create(settings, time_interval = demographic_interval) |>  
-    demographics$add_nursinghomes() |> 
-    demographics$add_highrisk(settings)
-  
-  population <- bind_rows(
-    vaccine$add(pop_start, selected_strategy, settings$vaccine_coverage, settings)
-  ) |> 
-    mutate(age_cat = case_when(
-      age < 60 ~ "50-59",
-      age < 70 ~ "60-69",
-      age < 80 ~ "70-79",
-      age >= 80 ~ "80+"
-    ),
-    date = case_when(
-      is.na(month) ~ lubridate::as_date(stringr::str_c(year, "-", "01", "-", "01")),
-      !(is.na(month)) ~ lubridate::as_date(stringr::str_c(year, "-", month, "-", "01"))
-    ),
-    season = case_when(
-      is.na(month) ~ stringr::str_c(lubridate::year(date) - 1," - ", lubridate::year(date)),
-      lubridate::month(date) >= settings$start_month ~ stringr::str_c(lubridate::year(date)," - ", lubridate::year(date)+1),
-      lubridate::month(date) < settings$start_month ~ stringr::str_c(lubridate::year(date) - 1," - ", lubridate::year(date))
-    ),
-    season = as.factor(season),
-    strategy = as.factor(strategy)) 
-  
-  
-  
-  
-  
-  ## Run model ---------------------------------------------------------------
-  
-  
-  
-  
-  if(time_step == "monthly"){
-    rsv_runmodel <- population |> 
-      left_join(rsv_prep, by = "age") |> 
-      mutate( probs = future_pmap(list(risk_group, probs, age, month, year), apply_riskstratification, pop_start, .options = furrr_opts),
-              probs = future_map2(month, probs, add_seasonality, rsv_dat$seasonality, .options = furrr_opts),
-              vac_effect = pmap(list(month, year, strategy, vaccine_status), add_vaccine_effect, rsv_dat)) |> 
-      filter(!(month %in% settings$exluded_months)) |> 
-      mutate( tree = future_pmap(list(population, probs, vac_effect, prop_nursing), run_tree, settings, .options = furrr_opts),
-              results = future_pmap(list(month, year, tree, costs, productivity, outcomes, le, le_nursing, indirect_medical_costs, strategy, vaccine_status, population, probs), calc_results, rsv_dat, probabilistic, iter, settings,
-                                    .options = furrr_opts))
-  } else if(time_step == "annual"){
-    rsv_runmodel <- population |> 
-      left_join(rsv_prep, by = "age") |> 
-      mutate( probs = pmap(list(risk_group, probs, age, month, year), apply_riskstratification, pop_start),
-              vac_effect = pmap(list(month, year, strategy, vaccine_status), add_vaccine_effect, rsv_dat), 
-              tree = pmap(list(population, probs, vac_effect, prop_nursing), run_tree, settings),
-              results = future_pmap(list(month, year, tree, costs, productivity, outcomes, le, le_nursing, indirect_medical_costs, strategy, vaccine_status, population, probs), calc_results, rsv_dat, probabilistic, iter, settings,
-                                    .options = furrr_opts))
-  }
-  
-
-  
-  
-  ## Explore results ---------------------------------------------------------
-  rsv_results <- rsv_runmodel |> 
-    select(strategy, season, date, age_cat, age, risk_group, population, results) |> 
-    tidyr::unnest(results)
-  
-  
-  
-  if(ret == "incremental"){
-    rm(rsv_runmodel)
-    rsv_incremental <- calc_incremental(rsv_results, 
-                                        "no_vaccine", 
-                                        "rsv_generic_vaccine")
-    gc()
-    
-    return(rsv_incremental)
-  } else if (ret == "all"){
-    rsv_incremental <- calc_incremental(rsv_results, 
-                                        "no_vaccine", 
-                                        "rsv_generic_vaccine")
-    gc()
-    
-    return(list(
-      results = rsv_results,
-      incremental = rsv_incremental,
-      data = rsv_dat,
-      raw_data = rsv_runmodel
-    ))
-  } else if(ret == "tidy"){
-    gc()
-    return(rsv_results)
-  } else{
-    gc()
-    return(rsv_results)
-  }
+  return(rsv_runmodel)
 }
 
 
-
-#' Function to run tree
+#' Function to run decision tree
 #'
 #' @param n number of individuals
 #' @param probs probabilities
@@ -1035,6 +848,7 @@ run_tree <- function(n, probs, vac_effect, prop_nursing, settings){
 #' @param settings settings
 #'
 #' @returns
+#' @export
 #'
 #' @examples
 run_tree_adverse_events <- function(n, probs, settings){
@@ -1053,6 +867,7 @@ run_tree_adverse_events <- function(n, probs, settings){
     ))
   })
 }
+
 #' Calculate outcomes after decision tree has run
 #'
 #' @param tree outcomes of run_tree()
@@ -1079,21 +894,22 @@ run_tree_adverse_events <- function(n, probs, settings){
 #' @examples
 calc_results <- function(current_month, 
                          current_year,
+                         age,
                          tree, 
                          costs, 
-                         productivity, 
-                         outcomes, 
-                         le, 
-                         le_nursing, 
-                         indirect_medical, 
                          strategy, 
                          vaccine_status, 
                          pop_size, 
                          probs, 
                          rsv_dat, 
+                         rsv_prep,
                          probabilistic, 
                          iter, 
                          settings){
+  sel_age <- age
+  rsv_prep_age <- dplyr::filter(rsv_prep, age == sel_age)
+  
+  
   if(strategy == "no_vaccine"){
     vac_dat <- rsv_dat$vaccines$no_vaccine
   } else if(strategy == "rsv_generic_vaccine"){
@@ -1121,12 +937,12 @@ calc_results <- function(current_month,
     vaccinate <- FALSE
   }
   
-  events <- calc_events(tree, ae_tree)
-  duration <- calc_duration(events, outcomes)
-  costs_out <- calc_costs(events, costs, productivity, duration)
+  events <- calc_events(tree, ae_tree, pop_size, vaccinate)
+  duration <- calc_duration(events, rsv_prep_age$outcomes[[1]])
+  costs_out <- calc_costs(events, costs, rsv_prep_age$productivity[[1]], duration)
   
-  costs_out <- costs_out |> 
-    calc_vaccination_costs(costs, events, productivity, duration, vac_dat, pop_size, vaccinate)
+  # costs_out <- costs_out |> 
+  #   calc_vaccination_costs(costs, events, productivity, duration, vac_dat, pop_size, vaccinate)
   
   #to calculate discounted le and qale, the data is dependent on the time step of the analysis
   #calculate the selected_year first, where the starting year == 1
@@ -1138,11 +954,11 @@ calc_results <- function(current_month,
   
   #then calculate the output qale and le data
   mortality_out_hosp <- calc_mort(events, 
-                                  filter(le, year == selected_year), 
+                                  filter(rsv_prep_age$le[[1]], year == selected_year), 
                                   selected_event = "mortality (hospital)")
   
   mortality_out_nursing <- calc_mort(events, 
-                                  le_nursing, 
+                                     rsv_prep_age$le_nursing[[1]], 
                                   selected_event = "mortality (nursing homes)")
   
   
@@ -1155,42 +971,50 @@ calc_results <- function(current_month,
     indirect_medical_out <- list(type = "excluded")
     warning("Additive indirect medical costs not yet implemented")
   } else if(settings$indirect_medical == "negative"){
-    indirect_med_costs <- indirect_medical |>  pull(indirect_medical_costs)
+    sel_age <- age
+    indirect_med_costs_value <- rsv_dat$indirect_medical |>  
+      filter(age == sel_age) |> 
+      pull(indirect_medical_costs)
+    
+    indirect_med_costs_discounted <- rsv_dat$indirect_medical |>  
+      filter(age == sel_age) |> 
+      pull(discounted)
+    
     mort_num <- unlist(mortality_out_hosp$number)
     
     indirect_medical_out <- list(
       type = "negative",
-      indirect_med_costs = indirect_med_costs * -1 * mort_num,
-      discounted = indirect_medical |>  pull(discounted)
+      indirect_med_costs = indirect_med_costs_value * -1 * mort_num,
+      discounted = indirect_med_costs_discounted
     )
   }
   
   raw_out <- list(
     events = events,
     costs = costs_out,
-    health = calc_health(events, outcomes),
+    health = calc_health(events, rsv_prep_age$outcomes[[1]]),
     mortality_hosp = mortality_out_hosp,
     mortality_nursing = mortality_out_nursing,
     indirect_medical =  indirect_medical_out
   )
   
   
-  tidy_out <- tidy_results(raw_out, 
-                           probabilistic = probabilistic, 
-                           iter = iter,
-                           settings = settings)
-  return(tidy_out)
+ 
+  return(raw_out)
 }
 
 #' Calculate number of events
 #'
 #' @param tree output of run_tree()
+#' @param ae_tree output of run_ae_tree()
+#' @param pop_size size of population
+#' @param vaccinate TRUE or FALSE, depending on whether individuals are vaccinated
 #'
 #' @return
 #' @export
 #'
 #' @examples
-calc_events <- function(tree, ae_tree){
+calc_events <- function(tree, ae_tree, pop_size, vaccinate){
   #create tibble with all events coming out of the decision tree
   #use list-columns to be able to incorporate probabilistic results
   events <- tibble(
@@ -1231,9 +1055,33 @@ calc_events <- function(tree, ae_tree){
                  list(ae_tree$ae_gbs))
     )
     
-    events <- bind_rows(events, ae_events)
+    
+  } else {
+    ae_events <- tibble(
+      event = c("adverse event, grade 3 (local)", 
+                "adverse event, grade 3 (systemic)", 
+                "adverse event, grade 4 (gbs)"),
+      number = c(list(0),
+                 list(0),
+                 list(0))
+    )
   }
   
+  if(vaccinate == TRUE){
+    vaccinations <- tibble(
+      event = "vaccination",
+      number = list(pop_size)
+    )
+    
+    
+  } else {
+    vaccinations <- tibble(
+      event = "vaccination",
+      number = list(0)
+    )
+  }
+  
+  events <- bind_rows(events, ae_events, vaccinations)
   return(events)
 }
 
@@ -1298,40 +1146,6 @@ calc_duration <- function(events, outcomes){
 #'
 #' @examples
 calc_costs <- function(events, costs, productivity, duration){
-
-  # select costs for all payoffs
-  ## NMA
-  costs_nma <- costs |> 
-    filter(cost_category == "nma") |> 
-    mutate(events = events |> filter(event == "non-medically attended RSV") |>  pull(number))
-  
-  ## GP
-  costs_gp <- costs |> 
-    filter(cost_category %in% c("gp", "medication")) |> 
-    mutate(events = events |> filter(event == "gp visit") |>  pull(number))
-  
-  ## ED
-  costs_ed <- costs |> 
-    filter(cost_item %in% c("patient transport to hospital by car",
-                            "emergency department visit")) |> 
-    mutate(cost_category = "ed",
-           events = events |> filter(event == "emergency department visit (patient not hospitalized)") |>  
-             pull(number))
-  
-  ## Hospital (non-icu)
-  costs_hosp_nonicu <- costs |> 
-    filter(cost_item %in% c("hospitalization, general ward", 
-                            "patient transport to hospital by car")) |> 
-    mutate(cost_category = "hospitalization",
-           events = events |> filter(event == "hospitalization (non-ICU)") |>  pull(number))
-  
-  ## Hospital (icu)
-  costs_hosp_icu <- costs |> 
-    filter(cost_item %in% c("hospitalization, including ICU", 
-                            "patient transport to hospital by car")) |> 
-    mutate(cost_category = "hospitalization",
-           events = events |> filter(event == "hospitalization (ICU)") |>  pull(number))
-  
   ## Production losses
   mean_daily_prod_loss <- productivity |> 
     pull(mean_daily_prod_hours)
@@ -1347,12 +1161,13 @@ calc_costs <- function(events, costs, productivity, duration){
       "emergency department visit (patient not hospitalized)",
       "hospitalization (non-ICU)",
       "hospitalization (ICU)",
-      "adverse event, grade 3 (local)",
-      "adverse event, grade 3 (systemic)",
+      # "adverse event, grade 3 (local)",
+      # "adverse event, grade 3 (systemic)",
       "adverse event, grade 4 (gbs)"
     )) |> 
     mutate(productivity_hours = map(prod_duration, ~.x * mean_daily_prod_loss)) |> 
     pull(productivity_hours)
+  
   
   prod_morb_trans <- list_transpose(prod_morbidity)
   
@@ -1365,96 +1180,44 @@ calc_costs <- function(events, costs, productivity, duration){
     pull(productivity_hours) |> 
     unlist()
   
-  ###calculate total productivity losses
-  total_prod_loss <- map2_dbl(prod_morb, prod_mortality, ~.x + .y)
-  costs_prod <- costs |> 
-    filter(cost_item %in% c("productivity per hour (paid jobs)")) |> 
-    mutate(cost_category = "productivity",
-           events = list(total_prod_loss))
   
   
-  ret <- bind_rows(
-    costs_nma,
-    costs_gp,
-    costs_ed,
-    costs_hosp_nonicu,
-    costs_hosp_icu,
-    costs_prod
-  ) |> 
-    mutate(total = map2(cost, events, ~.x * .y)) |> 
-    rename(unit_cost = cost)
+  #calculate costs associated with events
+  #add productivity losses
+  v_events <- stats::setNames(events$number, events$event)
+  costs_events <- costs |> 
+    mutate(
+      linked_total_rsv_cases = map(linked_total_rsv_cases, ~.x * v_events$`total RSV cases`),
+      linked_nma = map(linked_nma, ~.x * v_events$`non-medically attended RSV`),
+      linked_gp_visit = map(linked_gp_visit, ~.x * v_events$`gp visit`),
+      linked_ed_nonhosp = map(linked_ed_nonhosp, ~.x * v_events$`emergency department visit (patient not hospitalized)`),
+      linked_hosp_nonicu = map(linked_hosp_nonicu, ~.x * v_events$`hospitalization (non-ICU)`),
+      linked_hosp_icu = map(linked_hosp_icu, ~.x * v_events$`hospitalization (ICU)`),
+      linked_ae3_local = map(linked_ae3_local, ~.x * v_events$`adverse event, grade 3 (local)`),
+      linked_ae3_syst = map(linked_ae3_syst, ~.x * v_events$`adverse event, grade 3 (systemic)`),
+      linked_ae4 = map(linked_ae4, ~.x * v_events$`adverse event, grade 4 (gbs)`),
+      linked_vaccination = map(linked_vaccination, ~.x * v_events$`vaccination`),
+      events = pmap(list(linked_total_rsv_cases, 
+                         linked_nma, 
+                         linked_gp_visit, 
+                         linked_ed_nonhosp, 
+                         linked_hosp_nonicu,
+                         linked_hosp_icu,
+                         linked_ae3_local,
+                         linked_ae3_syst,
+                         linked_ae4,
+                         linked_vaccination),
+                    ~..1 + ..2 + ..3 + ..4 + ..5 + ..6 + ..7 + ..8 + ..9 + ..10),
+      events = case_when(
+        cost_item == "productivity per hour (paid jobs)" ~ list(map2_dbl(prod_morb, prod_mortality, ~.x + .y)),
+        .default = events
+      ),
+      total = map2(cost, events, ~.x * .y)) |> 
+    select(cost_category, cost_item, perspective_soc, perspective_hc, total)
   
-
-  return(ret)
+  return(costs_events)
 }
 
-#' Title
-#'
-#' @param x output from calc_costs()
-#' @param costs prepped costs data
-#' @param vac_dat selected vaccination data from rsv_dat
-#' @param pop_size population size
-#' @param vaccination TRUE if vaccination costs need to be added, FALSE for 0 vaccinations
-#'
-#' @return
-#' @export
-#'
-#' @examples
-calc_vaccination_costs <- function(x, costs, events, productivity, duration, vac_dat, pop_size, vaccination = TRUE){
-  n_vaccinations <- if_else(vaccination, list(pop_size), list(0))
-  
-  #costs of vaccination
-  vaccine_costs <- tibble(
-    cost_category = "vaccination",
-    cost_item = "vaccine",
-    cost = list(vac_dat |>  pluck("cost")),
-    perspective_hc = TRUE,
-    perspective_soc = TRUE
-  )
-  
-  costs_vaccination <- costs |> 
-    filter(cost_category == "vaccination") |> 
-    bind_rows(vaccine_costs) |> 
-    mutate(events = n_vaccinations) |> 
-    mutate(total = map2(cost, events, ~.x * .y)) |> 
-    rename(unit_cost = cost)
-  
-  # costs of adverse events
-  events_ae <- events |> 
-    filter(stringr::str_detect(event, "adverse event")) |> 
-    mutate(grade = case_when(
-      stringr::str_detect(event, "grade 3") ~ 3,
-      stringr::str_detect(event, "grade 4") ~ 4
-    ))
-  
-  costs_ae <- costs |> 
-    filter(cost_category == "adverse events") |> 
-    mutate(grade = case_when(
-      stringr::str_detect(cost_item, "grade 3") ~ 3,
-      stringr::str_detect(cost_item, "severe") ~ 4
-    ))
-  
-  ae_costs <- left_join(events_ae, costs_ae, by = "grade") |> 
-    select(
-      cost_category, cost_item = event, 
-      unit_cost = cost, perspective_hc, perspective_soc,
-      events = number
-    ) |> 
-    mutate(total = map2(unit_cost, events, ~.x * .y)) 
-  
-
-  ## Production losses
-  ## these are implemented in the calc_costs() function
-  
-
-  
-  
-  ret <- bind_rows(
-    x, costs_vaccination, ae_costs
-  ) 
-  
-  return(ret)
-}
 
 #' Calculate health outcomes
 #'
@@ -1523,10 +1286,13 @@ calc_health <- function(events, outcomes){
     ret <- bind_rows(ret, aes)
   } 
   
-  ret <- ret |> 
-    mutate(total_qaly_loss = map2(number, qaly_loss, ~.x * .y))
   
   #combine and calculate total QALY loss
+  ret <- ret |> 
+    mutate(total_qaly_loss = map2(number, qaly_loss, ~.x * .y)) |> 
+    select(event, total_qaly_loss)
+  
+  
   
   
   return(ret)
@@ -1569,114 +1335,368 @@ calc_mort <- function(events, le, selected_event = "mortality (hospital)"){
   return(ret)
 }
 
-#' Tidy results
+
+
+# Extract functions -------------------------------------------------------
+
+#' Helper function to extract data
 #'
-#' @param results output from calc_results
-#' @param iter number of iterations
-#' @param probabilistic TRUE/FALSE for probabilistic
-#' @param settings settings file
+#' @param model_run model_run object
+#' @param columns columns to hoist
 #'
-#' @return
-#' @export
+#' @returns
 #'
 #' @examples
-tidy_results <- function(results, probabilistic, iter, settings){
-  if(probabilistic == FALSE){
-    iter <- 1
-  }
-  events <- results$events |> 
-    mutate(category = "events",
-           discounted = FALSE) |> 
-    select(category, item = event, value = number, discounted)
-  
-  costs <- results$costs |> 
-    mutate(category = "costs",
-           discounted = FALSE) |> 
-    select(category, item = cost_item, value = total, cost_category, perspective_hc, perspective_soc, discounted)
-  
-  qalys <- results$health |> 
-    mutate(category = "qalys",
-           discounted = FALSE) |> 
-    select(category, item = event, value = total_qaly_loss, discounted)
-  
-  qalys_mort_hosp <- tibble(
-    category = "qalys",
-    item = "mortality (hospital)",
-    value = c(results$mortality_hosp$disc_qale, results$mortality_hosp$qale),
-    discounted = c(TRUE, FALSE)
-  )
-  
-  life_years_hosp <- tibble(
-    category = "life years",
-    item = c("discounted life years lost (hospital)", "life years lost (hospital)"),
-    value = c(results$mortality_hosp$disc_le, results$mortality_hosp$le),
-    discounted = c(TRUE, FALSE)
-  )
-  
-  ret_pre <- bind_rows(
-    events,
-    costs,
-    qalys,
-    qalys_mort_hosp,
-    life_years_hosp
-  )
-  
-  if(results$indirect_medical$type != "excluded"){
-    indirect_medical <- tibble(
-      category = "costs",
-      item = "indirect medical costs",
-      perspective_hc = FALSE,
-      perspective_soc = TRUE,
-      value = list(results$indirect_medical$indirect_med_costs),
-      discounted = results$indirect_medical$discounted,
-      cost_category = "indirect medical"
-    ) 
-    
-    ret_pre <- bind_rows(ret_pre, indirect_medical)
-  }
-  
-  if(settings$include_mortality_nursing == TRUE){
-    qalys_mort_nursing <- tibble(
-      category = "qalys",
-      item = "mortality (nursing homes)",
-      value = c(results$mortality_nursing$disc_qale, results$mortality_nursing$qale),
-      discounted = c(TRUE, FALSE)
-    )
-    
-    life_years_nursing <- tibble(
-      category = "life years",
-      item = c("discounted life years lost (nursing homes)", "life years lost (nursing homes)"),
-      value = c(results$mortality_nursing$disc_le, results$mortality_nursing$le),
-      discounted = c(TRUE, FALSE)
-    )
-    
-    ret_pre <- bind_rows(ret_pre, qalys_mort_nursing, life_years_nursing)
-    
-    
-  }
-  
-  ret <- ret_pre |> 
-    mutate(value = map(value, function(x, iter){
+extract_core_helper <- function(model_run, columns){
+  model_run |> 
+    tidyr::hoist(.col = results,
+                  columns) |> 
+    select(strategy, year, month, age_cat, age, risk_group, population, vaccine_status, date, season, all_of(columns))
+}
+
+#' Helper function to extract iterations
+#'
+#' @param unnest_model_run unnested model_run object
+#' @param n_iter number of iterations
+#'
+#' @returns
+#'
+#' @examples
+extract_iterations_helper <- function(unnest_model_run, n_iter) {
+  unnest_model_run |> 
+    mutate(value = map(value, function(x, n_iter){
       if(length(x) == 1){
-        value <- rep(x, iter)
-      } else if(length(x) == iter){
+        value <- rep(x, n_iter)
+      } else if(length(x) == n_iter){
         value <- x
       } else{
         l <- length(x)
         msg <- stringr::str_c("Length of value (",l,
                               ") does not correspond to iter (",
-                              iter, ").")
+                              n_iter, ").")
         print(ret_pre)
         stop(msg)
       }
       
-      tibble(iter = 1:iter,
+      tibble(iter = 1:n_iter,
              value = value)
-    }, iter)) |> 
+    }, n_iter)) |> 
     tidyr::unnest(value)
+}
+
+#' Extract function for events
+#'
+#' @param model_run model_run object
+#' @param n_iter number of iterations
+#' @param settings settings
+#' @param summarise setting whether to summarise results, TRUE or FALSE
+#'
+#' @returns
+#' @export
+#'
+#' @examples
+extract_events <- function(model_run, n_iter, settings, summarise = TRUE) {
+  ret <- extract_core_helper(model_run, "events") |> 
+    tidyr::unnest(events) |> 
+    rename(value = number) |> 
+    extract_iterations_helper(n_iter = n_iter)
+  
+  if(summarise == TRUE) {
+    ret <- ret |> 
+      group_by(strategy, year, month, age_cat, age, risk_group, population, vaccine_status, date, season, event) |> 
+      summarise(mean = mean(value),
+                median = stats::median(value),
+                cri_low = stats::quantile(value, .025),
+                cri_high = stats::quantile(value, .975),
+                .groups = "drop")
+  } 
   
   return(ret)
-} 
+}
+
+#' Extract function for costs
+#'
+#' @param model_run model_run object
+#' @param n_iter number of iterations
+#' @param settings settings
+#' @param summarise setting whether to summarise results, TRUE or FALSE, output is not per iteration
+#' @param simplify setting whether to simplify results, TRUE or FALSE, output is per iteration
+#'
+#' @returns
+#' @export
+#'
+#' @examples
+extract_costs <- function(model_run, n_iter, settings, summarise = TRUE, simplify = FALSE) {
+  
+  ret <- extract_core_helper(model_run, "costs") |> 
+    tidyr::unnest(costs) |> 
+    select(strategy, year, month, age_cat, age, risk_group, population, vaccine_status, date, season,
+           item = cost_item, value = total, cost_category, perspective_hc, perspective_soc) |>
+    mutate(discounted = FALSE)
+  
+  if(settings$indirect_medical != "exclude"){
+    indirect_medical <- model_run |> 
+      extract_core_helper("indirect_medical") |> 
+      mutate(indirect_medical = map(indirect_medical,
+                                    ~tibble(
+                                      item = "indirect medical costs",
+                                      perspective_hc = FALSE,
+                                      perspective_soc = TRUE,
+                                      value = list(.x$indirect_med_costs),
+                                      discounted = .x$discounted,
+                                      cost_category = "indirect medical"
+                                    ))) |> 
+      tidyr::unnest(indirect_medical)
+    
+    ret <- bind_rows(ret, indirect_medical)
+    
+  }
+  
+  if(summarise == TRUE & simplify == TRUE){
+    stop("Not summarise AND simplify can be set to TRUE")
+  }
+  
+  if(summarise == TRUE) {
+    ret <- extract_iterations_helper(ret, n_iter) |> 
+      group_by(strategy, year, month, age_cat, age, risk_group, population, vaccine_status, date, season, cost_category, item, discounted, perspective_hc, perspective_soc) |> 
+      summarise(mean = mean(value),
+                median = stats::median(value),
+                cri_low = stats::quantile(value, .025),
+                cri_high = stats::quantile(value, .975),
+                .groups = "drop")
+  } else if(simplify == TRUE){
+    ret <- extract_iterations_helper(ret, n_iter) |> 
+      group_by(strategy, year, month, age_cat, age, risk_group, iter, population, vaccine_status, date, season, discounted, perspective_hc, perspective_soc) |> 
+      summarise(value = sum(value),
+                .groups = "drop")
+  } else {
+    ret <- extract_iterations_helper(ret, n_iter)
+  }
+  
+  return(ret)
+}
+
+#' Extract function for events
+#'
+#' @param model_run model_run object
+#' @param n_iter number of iterations
+#' @param settings settings
+#' @param summarise setting whether to summarise results, TRUE or FALSE, output is not per iteration
+#' @param simplify setting whether to simplify results, TRUE or FALSE, output is per iteration
+#'
+#' @returns
+#' @export
+#'
+#' @examples
+extract_health <- function(model_run, n_iter, settings, summarise = TRUE, simplify = FALSE) {
+  
+  #morbidity
+  qalys <- extract_core_helper(model_run, "health") |> 
+    tidyr::unnest(health) |> 
+    select(strategy, year, month, age_cat, age, risk_group, population, vaccine_status, date, season,
+           item = event, value = total_qaly_loss) |>
+    mutate(discounted = FALSE,
+           category = "qaly")
+  
+  #mortality
+  mort_hosp <- extract_core_helper(model_run, "mortality_hosp") |>
+    tidyr::unnest(mortality_hosp) 
+  
+  mort_nursing <- extract_core_helper(model_run, "mortality_nursing") |>
+    tidyr::unnest(mortality_nursing) 
+  
+  mort <- bind_rows(mort_hosp, mort_nursing) |> 
+    tidyr::pivot_longer(cols = c("le", "disc_le", "qale", "disc_qale"), names_to = "category") |> 
+    rename(item = event) |> 
+    select(-number) |> 
+    mutate(discounted = if_else(stringr::str_sub(category, 1, 2) == "di", TRUE, FALSE),
+           category = as.factor(if_else(stringr::str_detect(category, "qale"), "qale", "le")))
+    
+  
+  ret <- bind_rows(qalys, mort)
+  
+  
+  if(summarise == TRUE & simplify == TRUE){
+    stop("Not summarise AND simplify can be set to TRUE")
+  }
+
+  if(summarise == TRUE) {
+    ret <- extract_iterations_helper(ret, n_iter) |> 
+      group_by(strategy, year, month, age_cat, age, risk_group, population, vaccine_status, date, season, item, discounted, category) |> 
+      summarise(mean = mean(value),
+                median = stats::median(value),
+                cri_low = stats::quantile(value, .025),
+                cri_high = stats::quantile(value, .975),
+                .groups = "drop")
+  } else if(simplify == TRUE){
+    ret <- extract_iterations_helper(ret, n_iter) |> 
+      group_by(strategy, year, month, age_cat, age, risk_group, iter, population, vaccine_status, date, season, discounted, category) |> 
+      summarise(value = sum(value),
+                .groups = "drop")
+  } else {
+    ret <- extract_iterations_helper(ret, n_iter)
+  }
+  
+  return(ret)
+}
+
+#' Add incremental results
+#'
+#' @param extracted_data extracted data from a non-summarised extract_ function
+#' @param reference_name name of reference
+#' @param intervention_name name of intervention
+#'
+#' @returns
+#' @export
+#'
+#' @examples
+add_incremental <- function(extracted_data, reference_name = "no_vaccine", intervention_name = "rsv_generic_vaccine") {
+  #return warning if extracted_data is summarised
+  if((is.null(extracted_data$value))) {
+    stop("extracted_data should not be summarised, change summarise to FALSE")
+  }
+  
+  
+  ## get all column names, except for the current strategy
+  join_columns <- colnames(select(extracted_data, -strategy, -value, -population, -vaccine_status))
+  join_columns_syms <- rlang::syms(join_columns)
+  
+  
+  res_reference <- extracted_data |> 
+    filter(strategy == reference_name) |> 
+    rename(reference = value) |> 
+    group_by(!!!join_columns_syms) |> 
+    summarise(reference = sum(reference),
+              reference_name = reference_name,
+              .groups = "drop")
+  
+  res_intervention <- extracted_data |> 
+    filter(strategy == intervention_name) |> 
+    rename(intervention = value) |> 
+    group_by(!!!join_columns_syms) |> 
+    summarise(intervention = sum(intervention),
+              intervention_name = intervention_name,
+              .groups = "drop")
+  
+  combined <- full_join(res_reference, res_intervention, by = join_columns) |> 
+    mutate( value = intervention - reference)
+  
+  return(combined)
+}
+
+
+#' Extract cost-effectiveness results
+#'
+#' @param model_run model_run object
+#' @param n_iter number of iterations
+#' @param settings settings
+#' @param reference_name name of reference
+#' @param intervention_name name of intervention
+#' @param perspective "healthcare" or "societal"
+#' @param discount TRUE or FALSE, whether to apply discounting to the results
+#' @param summarise setting whether to summarise results, TRUE or FALSE, output is not per iteration
+#'
+#' @returns
+#' @export
+#'
+#' @examples
+extract_cost_effectiveness <- function(model_run, 
+                                       n_iter, 
+                                       settings, 
+                                       reference_name = "no_vaccine", 
+                                       intervention_name = "rsv_generic_vaccine",
+                                       perspective = "societal", 
+                                       discount = TRUE,
+                                       summarise = FALSE){
+  
+  qalys_total <- extract_health(
+    model_run = model_run,
+    n_iter = n_iter,
+    settings = settings,
+    summarise = FALSE,
+    simplify = TRUE
+  ) |> 
+    filter(category == "qaly" |
+             (category == "qale" & discounted == TRUE))
+  
+  qalys_morbidity <- qalys_total |> 
+    filter(category == "qaly", 
+           discounted == FALSE)
+  
+  qalys_mortality <- qalys_total |> 
+    filter(category == "qale",
+           discounted == TRUE)
+  
+  costs <- extract_costs(
+    model_run = model_run,
+    n_iter = n_iter,
+    settings = settings,
+    summarise = FALSE,
+    simplify = TRUE
+  )
+  
+  if(discount == TRUE){
+    start_date <- stringr::str_c(settings$start_year, "-",settings$start_month,"-","01")
+    
+    qalys_morbidity <- qalys_morbidity |> 
+      discounting$discount_table(ref_date = start_date,
+                                 col_value = "value",
+                                 rate = settings$discount_rate$health)
+    
+    costs <- costs |> 
+      discounting$discount_table(ref_date = start_date,
+                                 col_value = "value",
+                                 rate = settings$discount_rate$economic)
+  }
+  
+  
+  if(perspective == "societal"){
+    costs <- costs |> 
+      filter(perspective_soc == TRUE)
+  } else if(perspective == "healthcare"){
+    costs <- costs |> 
+      filter(perspective_hc == TRUE)
+  }
+  
+  qalys_inc <- bind_rows(qalys_morbidity, qalys_mortality) |> 
+    add_incremental(reference_name, intervention_name) |> 
+    group_by(iter) |> 
+    summarise(reference_qalys = sum(reference),
+              intervention_qalys = sum(intervention),
+              incremental_qalys = sum(value) * -1)
+  
+  costs_inc <- costs |> 
+    add_incremental(reference_name, intervention_name) |> 
+    group_by(iter) |> 
+    summarise(reference_costs = sum(reference),
+              intervention_costs = sum(intervention),
+              incremental_costs = sum(value))
+  
+  
+  
+  ce <- left_join(costs_inc, qalys_inc, by = "iter")
+  
+  if(summarise == TRUE) {
+    ret <- ce |> 
+      select(-iter) |> 
+      summarise(across(.cols = everything(), list(mean = ~mean(.), 
+                                                  median = ~stats::median(.),
+                                                  cri_low = ~stats::quantile(., .025),
+                                                  cri_high = ~stats::quantile(., .975))),
+                icer = incremental_costs_mean / incremental_qalys_mean)
+  }  else {
+    ret <- ce
+  }
+  
+  return(ret)
+  
+}
+
+
+# Analyze functions -------------------------------------------------------
+
+
+
 
 #' Calculate incremental results
 #'
@@ -1759,6 +1779,37 @@ calc_incremental <- function(results, reference_name, intervention_name, monthly
   
   return(combined)
 } 
+
+#' Create CE table
+#'
+#' @param extracted_cost_effectiveness results from extract_cost_effectiveness()
+#' @param settings settings
+#'
+#' @returns
+#' @export
+#'
+create_cetable <- function(extracted_cost_effectiveness, settings){
+  extracted_cost_effectiveness |> 
+    mutate(rowname = case_when(
+      category == "costs" ~ "Costs",
+      category == "qalys" ~ "QALYs lost",
+      category == "life years" ~ "Life years lost"
+    )) |> 
+    select(rowname, value_reference, value_intervention, value_incremental, icer) |> 
+    gt::gt(rowname_col = "rowname") |> 
+    gt::cols_label(
+      value_reference = name_reference,
+      value_intervention = name_intervention,
+      value_incremental = "Incremental",
+      icer = "ICER"
+    ) |> 
+    gt::fmt_currency(rows = 1, currency = settings$currency, decimals = 0) |> 
+    gt::fmt_currency(columns = 5, currency = settings$currency, decimals = 0) |> 
+    gt::fmt_number(rows = c(2,3), columns = 4, decimals = 0) |> 
+    gt::fmt_number(rows = c(2,3), columns = c(2,3), scale_by = -1, decimals = 0) |> 
+    gt::sub_missing(columns = 5, missing_text = " ") |> 
+    gt::tab_source_note("ICER: incremental cost effectiveness ratio; QALY: quality adjusted life year")
+}
 
 #' Calculate cost effectiveness
 #'
@@ -1908,101 +1959,6 @@ calc_costeffectiveness <- function(incremental_results,
   
 }
 
-#' Summarise of RSV model results, to total costs and qalys per iteration
-#'
-#' @param results rsv model results, unnested
-#' @param discount TRUE/FALSE
-#' @param settings settings
-#'
-#' @returns
-#' @export
-#'
-#' @examples
-summarise_results <- function(results, discount = TRUE, perspective = "societal", settings){
-  included_categories <- c("costs", "qalys")
-  
-  if(discount == TRUE){
-    dr_e <- settings$discount_rate$economic
-    dr_h <- settings$discount_rate$health
-  } else if(discount == FALSE){
-    dr_e <- dr_h <- 0
-  }
-  
-  ## Costs
-  if(perspective == "societal"){
-    costs <- results |> 
-      filter(category == "costs",
-             perspective_soc == TRUE,
-             discounted == FALSE) |> 
-      group_by(strategy, iter, date) |> 
-      summarise(costs = sum(value),
-                .groups = "drop")
-  } else if(perspective == "healthcare"){
-    costs <- results |> 
-      filter(category == "costs",
-             perspective_hc == TRUE,
-             discounted == FALSE) |> 
-      group_by(strategy, iter, date) |> 
-      summarise(costs = sum(value),
-                .groups = "drop")
-  } else{
-    stop("Perspective should be either societal or healthcare")
-  }
-  
-  start_date <- lubridate::as_date(stringr::str_c(settings$start_year,"-", settings$start_month, "-01"))
-  
-  costs_disc <- costs |> 
-    discounting$discount_table(ref_date = start_date,
-                               col_value = "costs",
-                               rate = dr_e) |> 
-    group_by(strategy, iter) |> 
-    summarise(costs = sum(costs))
-  
-  
-  ## Health
-  
-  res_qaly_morbidity <- results |>
-    filter(category %in% c("qalys"),
-           item != "mortality (hospital)",
-           item != "mortality (nursing homes)",
-           item != "hospitalization (ICU)", #to prevent double counting
-           item != "hospitalization (non-ICU)") |>  #to prevent double counting
-    group_by(strategy, date, iter) |> 
-    summarise(qalys = sum(value),
-              .groups = "drop") |> 
-    discounting$discount_table(ref_date = start_date,
-                               col_value = "qalys",
-                               rate = dr_h) |> 
-    group_by(strategy, iter) |> 
-    summarise(qalys = sum(qalys),
-              .groups = "drop")
-    
-  res_mortality <- results |>
-    filter(category %in% c("qalys"),
-           item %in% c("mortality (hospital)", 
-                       "mortality (nursing homes)", 
-                       "discounted life years lost (hospital)", 
-                       "life years lost (hospital)",
-                       "discounted life years lost (nursing homes)", 
-                       "life years lost (nursing homes)"),
-           discounted == discount) |> 
-    group_by(strategy, iter) |> 
-    summarise(qalys = sum(value),
-              .groups = "drop")
-  
-  qalys_disc <- bind_rows(res_qaly_morbidity, res_mortality) |> 
-    group_by(strategy, iter) |> 
-    summarise(qalys = sum(qalys) * -1,
-              .groups = "drop")
-  
-  ret <- costs_disc |> 
-    left_join(qalys_disc, by = c("strategy", "iter"))
-  
-  return(ret)
-
-  
-  
-}
 
 #' Function to calculate cost-effective price
 #'
@@ -2103,6 +2059,9 @@ calc_price <- function(incremental_results,
   ))
   
 }
+
+
+# CEAC functions ----------------------------------------------------------
 
 #' Create CEAC
 #'
@@ -2205,6 +2164,11 @@ create_ce_plane <- function(incremental_results,
   
 }
 
+
+# DSA functions -----------------------------------------------------------
+
+
+
 #' Prepare DSA dataset
 #'
 #' @param settings settings
@@ -2248,12 +2212,54 @@ prep_dsa <- function(settings,  variation = .2) {
   ## Prep data ---------------------------------------------------------------
   rsv_prep <- prep_data(rsv_dat, settings, probabilistic = FALSE, iter = 1)
   
+  if(is.double(variation)){
+    rsv_prep_prob <- NA
+    v_offset <- c(1-variation, 1+variation)
+    c_variation <- stringr::str_c(variation*100, "% increase and decrease")
+    vaccine_eff_var <- tidyr::expand_grid(
+      param = c("out_upper", "out_lower", "hosp", "non_medical"),
+      offset = c(1-variation, 1+variation),
+      variation = c_variation
+    )
+  } else if(variation == "CrI") {
+    rsv_prep_prob <- prep_data(rsv_dat, settings, probabilistic = TRUE, iter = 1000)
+    v_offset <- c("low", "high")
+    c_variation <- stringr::str_c("CrI")
+    
+    vaccine_effectiveness_offset <-
+      load_data(settings, probabilistic = TRUE, iter = 1000)$vaccines$rsv_generic_vaccine
+    
+    vaccine_eff_var <- 
+      vaccine_effectiveness_offset$effectiveness |> 
+      mutate(effectiveness_mean = map_dbl(effectiveness, mean),
+             effectiveness_high = map_dbl(effectiveness, ~stats::quantile(.x, .975)),
+             effectiveness_low = map_dbl(effectiveness, ~stats::quantile(.x, .025)),
+             offset_high = effectiveness_high / effectiveness_mean,
+             offset_low = effectiveness_low / effectiveness_mean) |> 
+      group_by(outcome) |> 
+      summarise(offset_high = mean(offset_high),
+                offset_low = mean(offset_low)) |> 
+      filter(!(is.na(offset_high))) |> 
+      tidyr::pivot_longer(starts_with("offset"), names_prefix = "offset_") |> 
+      rename(param = outcome,
+             offset = value) |> 
+      select(-name) |> 
+      mutate(variation = c_variation)
+    
+    variation <- .2
+
+  } else {
+    stop("variation is not correct")
+  }
+  
+  
   ## Get base case
   dsa_basecase <- tibble(
     category = "base_case",
     param = "base_case",
-    offset = 1,
-    data = list(rsv_prep)
+    offset = as.character(1),
+    data = list(rsv_prep),
+    variation = "base case"
   )
   
   ## Create scenarios
@@ -2262,19 +2268,37 @@ prep_dsa <- function(settings,  variation = .2) {
   dsa_probs <- tidyr::expand_grid(
     category = "probs",
     param = dsa_probs_params,
-    offset = c(1-variation, 1+variation),
+    offset = v_offset,
+    variation = c_variation
   ) |> 
-    mutate(data = pmap(list(param, offset), calc_dsa_probs, rsv_prep))
+    mutate(data = pmap(list(param, offset), calc_dsa_probs, rsv_prep, rsv_prep_prob),
+           offset = as.character(offset))
+  
   
   ### Costs
   dsa_cost_params <- rsv_prep$costs[[1]] |>  pull(cost_item) |>  unique()
   
-  dsa_costs <- tidyr::expand_grid(
+  dsa_costs_det <- tidyr::expand_grid(
     category = "costs",
     param = dsa_cost_params,
     offset = c(1-variation, 1+variation),
+    variation = stringr::str_c(variation*100, "% increase and decrease")
   ) |> 
-    mutate(data = pmap(list(param, offset), calc_dsa_costs, rsv_prep))
+    filter(param %in% (rsv_dat$costs |> filter(distribution == "none") |> pull("cost_item"))) |> 
+    mutate(data = pmap(list(param, offset), calc_dsa_costs, rsv_prep, NA),
+           offset = as.character(offset))
+  
+  dsa_costs_prob <- tidyr::expand_grid(
+    category = "costs",
+    param = dsa_cost_params,
+    offset = v_offset,
+    variation = c_variation
+  ) |> 
+    filter(!(param %in% (rsv_dat$costs |> filter(distribution == "none") |> pull("cost_item")))) |> 
+    mutate(data = pmap(list(param, offset), calc_dsa_costs, rsv_prep, rsv_prep_prob),
+           offset = as.character(offset))
+  
+  dsa_costs <- bind_rows(dsa_costs_det, dsa_costs_prob) 
   
   ### Outcomes
   ### filter out adverse events as bug fixes
@@ -2282,24 +2306,39 @@ prep_dsa <- function(settings,  variation = .2) {
     #filter(stringr::str_detect(item, "adverse event", negate = TRUE)) |> 
     pull(item)
   
-  dsa_outc <- rsv_prep$outcomes[[1]] |> 
+  outc_det <- rsv_dat$outcomes |> filter(distribution == "none") |> pull(item)
+  outc_prob <- rsv_dat$outcomes |> filter(distribution != "none") |> pull(item)
+  dsa_outc_det <- rsv_prep$outcomes[[1]] |> 
     select(outcome_cat = category, param = item) |> 
+    filter(param %in% outc_det) |> 
     mutate(offset = list(c(1-variation, 1+variation)),
            category = "outcomes") |> 
     tidyr::unnest(offset) |> 
-    mutate(data = pmap(list(param, outcome_cat, offset), calc_dsa_outc, rsv_prep)) |> 
-    mutate(param = stringr::str_c(outcome_cat, " | ", param)) |> 
+    mutate(data = pmap(list(param, outcome_cat, offset), calc_dsa_outc, rsv_prep, NA),
+           param = stringr::str_c(outcome_cat, " | ", param),
+           offset = as.character(offset),
+           variation = stringr::str_c(variation*100, "% increase and decrease")) |> 
     select(-outcome_cat)
   
-
+  dsa_outc_prob <- rsv_prep$outcomes[[1]] |> 
+    select(outcome_cat = category, param = item) |> 
+    filter(!(param %in% outc_det)) |> 
+    mutate(offset = list(v_offset),
+           category = "outcomes") |> 
+    tidyr::unnest(offset) |> 
+    mutate(data = pmap(list(param, outcome_cat, offset), calc_dsa_outc, rsv_prep, rsv_prep_prob),
+           param = stringr::str_c(outcome_cat, " | ", param),
+           offset = as.character(offset),
+           variation = c_variation) |> 
+    select(-outcome_cat)
+  
+  
+  dsa_outc <- bind_rows(dsa_outc_det, dsa_outc_prob)
   
   # vaccine effectiveness
-  dsa_vaccine <- tidyr::expand_grid(
-    category = "vaccine effectiveness",
-    param = c("out_upper", "out_lower", "hosp", "non_medical"),
-    offset = c(1-variation, 1+variation)
-  ) |> 
-    mutate(rsv_dat = list(rsv_dat),
+  dsa_vaccine <- vaccine_eff_var |> 
+    mutate(category = "vaccine_effectiveness",
+           rsv_dat = list(rsv_dat),
            rsv_dat = pmap(list(rsv_dat, param, offset), function(rsv_dat, param, offset){
              effectiveness_data <- rsv_dat$vaccines$rsv_generic_vaccine$effectiveness 
              
@@ -2315,7 +2354,8 @@ prep_dsa <- function(settings,  variation = .2) {
              return(rsv_dat)
              
            }),
-           data = list(rsv_prep))
+           data = list(rsv_prep),
+           offset = as.character(offset))
   
   
 
@@ -2326,8 +2366,9 @@ prep_dsa <- function(settings,  variation = .2) {
     category = "productivity",
     param = dsa_prod_params,
     offset = c(1-variation, 1+variation),
-  ) |> 
-    mutate(data = pmap(list(param, offset), calc_dsa_productivity, rsv_prep))
+    variation = stringr::str_c(variation*100, "% increase and decrease")) |> 
+    mutate(data = pmap(list(param, offset), calc_dsa_productivity, rsv_prep),
+           offset = as.character(offset)) 
   
   dsa_fulldata <- bind_rows(
     dsa_basecase,
@@ -2369,41 +2410,57 @@ run_dsa <- function(prepped_dsa, settings, n_cores = 1){
     packages = NULL,
     seed = TRUE
   )
+  # calc_dsa <- prepped_dsa |> 
+  #   ungroup() |> 
+  #   mutate(
+  #     model_run = pmap(list(data, population, pop_start, rsv_dat), function(rsv_prep, population, pop_start, rsv_dat, probabilistic, settings){
+  #       ce_result <- population |> 
+  #         left_join(select(rsv_prep, age, probs, costs), by = "age") |> 
+  #         mutate( costs = map2(costs, strategy, apply_strategy_costs, settings),
+  #                 probs = pmap(list(risk_group, probs, age, month, year), apply_riskstratification, pop_start),
+  #                 vac_effect = pmap(list(month, year, strategy, vaccine_status), add_vaccine_effect, rsv_dat), 
+  #                 tree = pmap(list(population, probs, vac_effect, prop_nursing), run_tree, settings),
+  #                 results = future_pmap(list(month, year, age, tree, costs, strategy, vaccine_status, population, probs), calc_results, rsv_dat, rsv_prep, probabilistic, iter, settings,
+  #                                       .options = furrr_opts)) |> 
+  #         extract_cost_effectiveness(n_iter = iter, settings = settings, discount = TRUE, summarise = TRUE)
+  #       
+  #       
+  # 
+  #       return(tibble(
+  #         icer = ce_result$icer,
+  #         incremental_costs = ce_result$incremental_costs_mean,
+  #         incremental_qalys = ce_result$incremental_qalys_mean
+  #       ))
+  #       
+  #     }, 
+  #     probabilistic, settings)
+  #   ) 
+  
   calc_dsa <- prepped_dsa |> 
     ungroup() |> 
     mutate(
-      model_run = pmap(list(data, population, pop_start, rsv_dat), function(rsv_prep, population, pop_start, rsv_dat, probabilistic, settings){
-        rsv_runmodel <- population |> 
-          left_join(rsv_prep, by = "age") |> 
-          mutate( probs = pmap(list(risk_group, probs, age, month, year), apply_riskstratification, pop_start),
+      model_run = future_pmap(list(data, population, pop_start, rsv_dat), 
+                               function(rsv_prep, population, pop_start, rsv_dat, probabilistic, settings){
+        ce_result <- population |> 
+          left_join(select(rsv_prep, age, probs, costs), by = "age") |> 
+          mutate( costs = map2(costs, strategy, apply_strategy_costs, settings),
+                  probs = pmap(list(risk_group, probs, age, month, year), apply_riskstratification, pop_start),
                   vac_effect = pmap(list(month, year, strategy, vaccine_status), add_vaccine_effect, rsv_dat), 
                   tree = pmap(list(population, probs, vac_effect, prop_nursing), run_tree, settings),
-                  results = future_pmap(list(month, year, tree, costs, productivity, outcomes, le, le_nursing, indirect_medical_costs, strategy, vaccine_status, population, probs), calc_results, rsv_dat, probabilistic, iter, settings,
-                  .options = furrr_opts))
+                  results = pmap(list(month, year, age, tree, costs, strategy, vaccine_status, population, probs), calc_results, rsv_dat, rsv_prep, probabilistic, iter, settings)) |> 
+          extract_cost_effectiveness(n_iter = iter, settings = settings, discount = TRUE, summarise = TRUE)
         
-        rsv_results <- rsv_runmodel |> 
-          select(strategy, season, date, age_cat, age, risk_group, population, results) |> 
-          tidyr::unnest(results)
         
-        rm(rsv_runmodel)
-        
-        rsv_incremental <- calc_incremental(rsv_results, 
-                                            "no_vaccine", 
-                                            "rsv_generic_vaccine")
-        
-        rsv_ce <- calc_costeffectiveness(
-          rsv_incremental,
-          settings = settings
-        )
         
         return(tibble(
-          icer = rsv_ce[[3, "icer"]],
-          incremental_costs = rsv_ce[[1, "value_incremental"]],
-          incremental_qalys = rsv_ce[[3, "value_incremental"]]
+          icer = ce_result$icer,
+          incremental_costs = ce_result$incremental_costs_mean,
+          incremental_qalys = ce_result$incremental_qalys_mean
         ))
         
       }, 
-      probabilistic, settings)
+      probabilistic, settings,
+      .options = furrr_opts)
     ) 
   
   plan(sequential)
@@ -2412,6 +2469,8 @@ run_dsa <- function(prepped_dsa, settings, n_cores = 1){
     tidyr::unnest(model_run) |> 
     mutate(
       direction = case_when(
+        offset == "low" ~ "Low value",
+        offset == "high" ~ "High value",
         offset < 1 ~ "Low value",
         offset > 1 ~ "High value",
         offset == 1 & category == "base_case" ~ "Base case",
@@ -2419,7 +2478,7 @@ run_dsa <- function(prepped_dsa, settings, n_cores = 1){
       )
     ) |> 
     select(
-      category, param, direction, offset, icer, incremental_costs, incremental_qalys
+      category, param, direction, variation,  offset, icer, incremental_costs, incremental_qalys
     )
   
   
@@ -2447,7 +2506,7 @@ create_tornado <- function(dsa_data, settings, parameter = "icer", cutoff = NA){
   
   dsa_tidy <- dsa_data |> 
     filter(direction != "Base case") |> 
-    select(category, param, direction, value = all_of(parameter)) |> 
+    select(category, param, direction, variation, value = all_of(parameter)) |> 
     mutate( # category = case_when(
            #   category == "probs" ~ "Probabilities",
            #   category == "outcomes" ~ "Outcomes",
@@ -2455,6 +2514,11 @@ create_tornado <- function(dsa_data, settings, parameter = "icer", cutoff = NA){
            #   category == "vaccine effectiveness" ~ "Vaccine effectiveness"
            # ),
            param = stringr::str_c(category, " | ", param),
+           param = case_when(
+             variation == "CrI" ~ stringr::str_c(param, "*"),
+             variation == "20% increase and decrease" ~ stringr::str_c(param, "^"),
+             .default = stringr::str_c(param, " - ", variation)
+           ),
            param = as.factor(param))
   
   importance <- dsa_tidy |> 
@@ -2495,6 +2559,7 @@ create_tornado <- function(dsa_data, settings, parameter = "icer", cutoff = NA){
     ggplot2::geom_rect(ggplot2::aes(xmin = valuemin, xmax = valuemax, ymin = location-.4, ymax = location+.4, fill = direction)) +
     ggplot2::geom_vline(xintercept = base_case_value) +
     ggplot2::scale_y_continuous(breaks = importance$location, labels = importance$param) +
+    ggplot2::scale_x_continuous(name = "Incremental cost-effectiveness ratio (ICER)", labels = scales::label_currency(prefix = "€")) +
     ggplot2::xlab(parameter)
     
 }
@@ -2507,20 +2572,39 @@ create_tornado <- function(dsa_data, settings, parameter = "icer", cutoff = NA){
 #'
 #' @returns
 #'
-calc_dsa_probs <- function(sel_param, offset, prepped_data){
+calc_dsa_probs <- function(sel_param, offset, prepped_data, prepped_data_prob = NA){
   sel_data <- prepped_data$probs
-  loc_variable <- sel_data[[1]] |> 
-    mutate(row = row_number()) |> 
-    filter(param == sel_param) |> 
-    pull(row)
-  ret <- map(sel_data, function(x, loc_variable, offset){
-    new_value  <- as.double(x[[loc_variable, 2]])*offset
-    
-    x[[loc_variable, 2]] <- as.list(new_value)
-    
-    return(x)
-    
-  }, loc_variable, offset)
+
+  if(is.double(offset)){
+    ret <- map(sel_data, function(x, sel_param, offset){
+      out <- x |> 
+        mutate(prob = case_when(
+          param == sel_param ~ map(prob, ~.x * offset),
+          .default = prob
+        ))
+      return(out)
+      
+    }, sel_param, offset)
+  } else if(offset %in% c("low", "high")){
+    sel_data_prob <- prepped_data_prob$probs
+    ret <- map2(sel_data, sel_data_prob, function(x, x_prob, sel_param, offset){
+      vec <- x_prob |> filter(param == sel_param) |> pull(prob) |> unlist()
+      new_value <- stats::quantile(vec, if_else(offset == "high", .975, .025))
+      
+      
+      out <- x |> 
+        mutate(prob = case_when(
+          param == sel_param ~ as.list(new_value),
+          .default = prob
+        ))
+      
+      return(out)
+      
+    }, sel_param, offset)
+  } else{
+    stop("input for offset not correct, should be a double or low or high")
+  }
+  
   
   prepped_data$probs <- ret
   return(prepped_data)
@@ -2534,23 +2618,42 @@ calc_dsa_probs <- function(sel_param, offset, prepped_data){
 #'
 #' @returns
 #'
-calc_dsa_costs <- function(sel_param, offset, prepped_data){
+calc_dsa_costs <- function(sel_param, offset, prepped_data, prepped_data_prob = NA){
   sel_data <- prepped_data$costs
-  loc_variable <- sel_data[[1]] |> 
-    mutate(row = row_number()) |> 
-    filter(cost_item == sel_param) |> 
-    pull(row)
-  ret <- map(sel_data, function(x, loc_variable, offset){
-    new_value  <- as.double(x[[loc_variable, 3]])*offset
-    
-    x[[loc_variable, 3]] <- as.list(new_value)
-    
-    return(x)
-    
-  }, loc_variable, offset)
+  
+  if(is.double(offset)){
+    ret <- map(sel_data, function(x, sel_param, offset){
+      out <- x |> 
+        mutate(cost = case_when(
+          cost_item == sel_param ~ map(cost, ~.x * offset),
+          .default = cost
+        ))
+      return(out)
+  }, sel_param, offset)
+    } else if(offset %in% c("low", "high")){
+    sel_data_prob <- prepped_data_prob$costs
+    ret <- map2(sel_data, sel_data_prob, function(x, x_prob, sel_param, offset){
+      vec <- x_prob |> filter(cost_item == sel_param) |> pull(cost) |> unlist()
+      new_value <- stats::quantile(vec, if_else(offset == "high", .975, .025))
+      
+      
+      out <- x |> 
+        mutate(cost = case_when(
+          cost_item == sel_param ~ as.list(new_value),
+          .default = cost
+        ))
+      
+      return(out)
+      
+    }, sel_param, offset)
+  } else{
+    stop("input for offset not correct, should be a double or low or high")
+  }
+  
   
   prepped_data$costs <- ret
   return(prepped_data)
+  
 }
 
 #' Helper function to generate DSA parameters for outcomes
@@ -2561,21 +2664,38 @@ calc_dsa_costs <- function(sel_param, offset, prepped_data){
 #'
 #' @returns
 #'
-calc_dsa_outc <- function(sel_param, outc_cat, offset, prepped_data){
+calc_dsa_outc <- function(sel_param, outc_cat, offset, prepped_data, prepped_data_prob = NA){
   sel_data <- prepped_data$outcomes
-  loc_variable <- sel_data[[length(sel_data)]] |> 
-    mutate(row = row_number()) |> 
-    filter(item == sel_param,
-           category == outc_cat) |> 
-    pull(row)
-  ret <- map(sel_data, function(x, loc_variable, offset){
-    new_value  <- as.double(x[[loc_variable, 3]])*offset
-    
-    x[[loc_variable, 3]] <- as.list(new_value)
-    
-    return(x)
-    
-  }, loc_variable, offset)
+
+  if(is.double(offset)){
+    ret <- map(sel_data, function(x, sel_param, offset){
+      out <- x |> 
+        mutate(cost = case_when(
+          item == sel_param & category == outc_cat ~ map(outc, ~.x * offset),
+          .default = outc
+        ))
+      return(out)
+    }, sel_param, offset)} else if(offset %in% c("low", "high")){
+      sel_data_prob <- prepped_data_prob$outcomes
+      ret <- map2(sel_data, sel_data_prob, function(x, x_prob, sel_param, offset){
+        vec <- x_prob |> filter(item == sel_param & category == outc_cat) |> pull(outc) |> unlist()
+        new_value <- stats::quantile(vec, if_else(offset == "high", .975, .025))
+        
+        
+        out <- x |> 
+          mutate(cost = case_when(
+            item == sel_param & category == outc_cat ~ as.list(new_value),
+            .default = outc
+          ))
+        
+        return(out)
+        
+      }, sel_param, offset)
+    } else{
+      stop("input for offset not correct, should be a double or low or high")
+    }
+
+  
   
   prepped_data$outcomes <- ret
   return(prepped_data)
@@ -2603,6 +2723,11 @@ calc_dsa_productivity <- function(sel_param, offset, prepped_data){
   prepped_data$productivity <- ret
   return(prepped_data)
 }
+
+
+# Other helper functions --------------------------------------------------
+
+
 
 #' Add seasonality to probabilities
 #'
@@ -2706,6 +2831,75 @@ apply_riskstratification <- function(risk_group, probs, sel_age, sel_month, sel_
   
   
   return(ret)
+}
+
+#' Apply strategy-specific costs
+#'
+#' @param costs prepped costs
+#' @param strategy name of strategy
+#'
+#' @returns
+#' @export
+#'
+#' @examples
+apply_strategy_costs <- function(costs, strategy, settings){
+  strat <- pluck(settings$included_strategies, as.character(strategy))
+  vaccine_costs <- tibble(
+    cost_category = "vaccination",
+    cost_item = "vaccine",
+    cost = list(strat$price),
+    perspective_hc = TRUE,
+    perspective_soc = TRUE
+  )
+  
+  costs |> 
+    add_row(vaccine_costs) |> 
+    mutate(linked_total_rsv_cases = FALSE,
+           linked_nma = case_when(
+             cost_category == "nma" ~ TRUE,
+             .default = FALSE
+           ),
+           linked_gp_visit = case_when(
+             cost_category == "gp" ~ TRUE,
+             cost_item == "medication following gp visit" ~ TRUE,
+             .default = FALSE
+           ),
+           linked_ed = FALSE,
+           linked_ed_nonhosp = case_when(
+             cost_category == "ed" ~ TRUE,
+             cost_item == "patient transport to hospital by car" ~ TRUE,
+             .default = FALSE
+           ),
+           linked_hosp_nonicu = case_when(
+             cost_item == "hospitalization, general ward"  ~ TRUE,
+             cost_item == "patient transport to hospital by car" ~ TRUE,
+             .default = FALSE
+           ),
+           linked_hosp_icu = case_when(
+             cost_item == "hospitalization, including ICU"  ~ TRUE,
+             cost_item == "patient transport to hospital by car" ~ TRUE,
+             .default = FALSE
+           ),
+           linked_hosp_surv = FALSE,
+           linked_hosp_total = FALSE,
+           linked_mort_hosp = FALSE,
+           linked_mort_nurse = FALSE,
+           linked_mort_total = FALSE,
+           linked_ae3_local = case_when(
+             cost_item == "adverse event, grade 3"  ~ TRUE,
+             .default = FALSE
+           ),
+           linked_ae3_syst = linked_ae3_local,
+           linked_ae4 = case_when(
+             cost_item == "adverse event, severe"  ~ TRUE,
+             .default = FALSE
+           ),
+           linked_vaccination = case_when(
+             cost_category == "vaccination"  ~ TRUE,
+             .default = FALSE
+           ))
+  
+  
 }
 
 #' Add vaccine effect (old)
